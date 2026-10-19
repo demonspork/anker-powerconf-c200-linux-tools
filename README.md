@@ -130,6 +130,28 @@ Other selectors seen in the same DLL but not yet wired in:
 
 The C310 (`291a:3367`) exposes the same unit `0x06` extension unit GUID (`41769ea2-04de-e347-8b2b-f4341aff003b`) and the C200 selectors above work on it unchanged. `exposure_smoothing`, `exposure_compensation` and `face_exposure` are gated to the C310. It also carries three further extension units (IDs `3`, `7`, `8`) that this tool does not touch. Avoid issuing `GET_CUR` on unit `8` selector `0x08` (a 512-byte control): on firmware V2.21 it times out and leaves the camera unresponsive until it is power-cycled.
 
+## GUI
+
+`gui/` holds a small desktop app (Rust + egui) with a live preview and a panel for every control the connected model supports. It links the C sources in `src/` directly, so the CLI and the GUI share one control table and one protocol implementation, including the per-model gating.
+
+```sh
+cd gui
+cargo build --release
+./target/release/anker-webcam-gui
+```
+
+The binary depends only on libc at link time and uses the system's Wayland or X11 and OpenGL libraries at runtime, so it runs unchanged on KDE, GNOME and wlroots compositors such as Hyprland. It needs no GTK or Qt.
+
+Features:
+
+- Lists every connected PowerConf C200 / AnkerWork C310 (tick "Show all cameras" to manage the standard UVC controls of any other webcam).
+- Live preview in YUYV or MJPEG at any mode the camera offers; MJPEG is decoded in pure Rust.
+- The exposure smoothing rectangle is drawn over the preview and can be dragged into place; the size is set with the spinners.
+- Standard UVC controls show the driver's range and default, and grey out when another control overrides them (manual exposure under auto exposure, for example).
+- Values are written when you release the slider or box, then read back so the panel shows what the camera accepted.
+
+The preview holds the capture node open, so stop it (or close the app) before a video call needs the camera.
+
 ## Releases
 
 Prebuilt binaries are published on the GitHub Releases page:

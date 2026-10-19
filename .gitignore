@@ -8,3 +8,4 @@ AnkerWork_Installer_Official.exe
 AnkerWork_Official.dmg
 *.core
 core
+gui/target/

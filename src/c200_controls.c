@@ -5,27 +5,31 @@
 #include <strings.h>
 
 static const struct c200_control_info C200_CONTROLS[] = {
-	{"fov", C200_CONTROL_KIND_VENDOR_FOV, 0x10, "Vendor FOV preset/value"},
-	{"hdr", C200_CONTROL_KIND_VENDOR_BOOL, 0x13, "Vendor HDR toggle"},
-	{"horizontal_flip", C200_CONTROL_KIND_VENDOR_BOOL, 0x11, "Vendor horizontal mirror"},
-	{"vertical_screen", C200_CONTROL_KIND_VENDOR_BOOL, 0x0a, "Vendor vertical screen mode"},
-	{"anti_flicker", C200_CONTROL_KIND_VENDOR_U8, 0x12, "Vendor anti-flicker mode"},
-	{"brightness", C200_CONTROL_KIND_V4L2_INT, V4L2_CID_BRIGHTNESS, "Standard UVC brightness"},
-	{"contrast", C200_CONTROL_KIND_V4L2_INT, V4L2_CID_CONTRAST, "Standard UVC contrast"},
-	{"saturation", C200_CONTROL_KIND_V4L2_INT, V4L2_CID_SATURATION, "Standard UVC saturation"},
-	{"hue", C200_CONTROL_KIND_V4L2_INT, V4L2_CID_HUE, "Standard UVC hue"},
-	{"white_balance_automatic", C200_CONTROL_KIND_V4L2_BOOL, V4L2_CID_AUTO_WHITE_BALANCE, "Standard UVC auto white balance"},
-	{"gamma", C200_CONTROL_KIND_V4L2_INT, V4L2_CID_GAMMA, "Standard UVC gamma"},
-	{"power_line_frequency", C200_CONTROL_KIND_V4L2_MENU, V4L2_CID_POWER_LINE_FREQUENCY, "Standard UVC power-line frequency"},
-	{"white_balance_temperature", C200_CONTROL_KIND_V4L2_INT, V4L2_CID_WHITE_BALANCE_TEMPERATURE, "Standard UVC white balance temperature"},
-	{"sharpness", C200_CONTROL_KIND_V4L2_INT, V4L2_CID_SHARPNESS, "Standard UVC sharpness"},
-	{"auto_exposure", C200_CONTROL_KIND_V4L2_MENU, V4L2_CID_EXPOSURE_AUTO, "Standard UVC auto exposure mode"},
-	{"exposure_time_absolute", C200_CONTROL_KIND_V4L2_INT, V4L2_CID_EXPOSURE_ABSOLUTE, "Standard UVC exposure time"},
-	{"pan_absolute", C200_CONTROL_KIND_V4L2_INT, V4L2_CID_PAN_ABSOLUTE, "Standard UVC pan"},
-	{"tilt_absolute", C200_CONTROL_KIND_V4L2_INT, V4L2_CID_TILT_ABSOLUTE, "Standard UVC tilt"},
-	{"focus_absolute", C200_CONTROL_KIND_V4L2_INT, V4L2_CID_FOCUS_ABSOLUTE, "Standard UVC focus"},
-	{"focus_automatic_continuous", C200_CONTROL_KIND_V4L2_BOOL, V4L2_CID_FOCUS_AUTO, "Standard UVC autofocus"},
-	{"zoom_absolute", C200_CONTROL_KIND_V4L2_INT, V4L2_CID_ZOOM_ABSOLUTE, "Standard UVC zoom"},
+	{"fov", C200_CONTROL_KIND_VENDOR_FOV, 0x10, "Vendor FOV preset/value", 0, C200_MODEL_ANY},
+	{"hdr", C200_CONTROL_KIND_VENDOR_BOOL, 0x13, "Vendor HDR toggle", 0, C200_MODEL_ANY},
+	{"horizontal_flip", C200_CONTROL_KIND_VENDOR_BOOL, 0x11, "Vendor horizontal mirror", 0, C200_MODEL_ANY},
+	{"vertical_screen", C200_CONTROL_KIND_VENDOR_BOOL, 0x0a, "Vendor vertical screen mode", 0, C200_MODEL_ANY},
+	{"anti_flicker", C200_CONTROL_KIND_VENDOR_U8, 0x12, "Vendor anti-flicker mode", 0, C200_MODEL_ANY},
+	{"exposure_smoothing", C200_CONTROL_KIND_VENDOR_AREA_METERING, 0x18, "Vendor exposure smoothing / area metering (on|off[,x,y,w,h] on a 3840x2160 grid)", 0, .models = C200_MODEL_C310},
+	{"area_metering", C200_CONTROL_KIND_VENDOR_AREA_METERING, 0x18, "Alias of exposure_smoothing", 0, .models = C200_MODEL_C310},
+	{"exposure_compensation", C200_CONTROL_KIND_VENDOR_ENABLE_U8, 0x19, "Vendor auto exposure (on|off[,compensation 0..60], 30 is neutral)", .max_value = 60, .models = C200_MODEL_C310},
+	{"face_exposure", C200_CONTROL_KIND_VENDOR_ENABLE_U8, 0x0b, "Vendor face auto exposure / FACE AE (on|off[,value 0..60])", .max_value = 60, .models = C200_MODEL_C310},
+	{"brightness", C200_CONTROL_KIND_V4L2_INT, V4L2_CID_BRIGHTNESS, "Standard UVC brightness", 0, C200_MODEL_ANY},
+	{"contrast", C200_CONTROL_KIND_V4L2_INT, V4L2_CID_CONTRAST, "Standard UVC contrast", 0, C200_MODEL_ANY},
+	{"saturation", C200_CONTROL_KIND_V4L2_INT, V4L2_CID_SATURATION, "Standard UVC saturation", 0, C200_MODEL_ANY},
+	{"hue", C200_CONTROL_KIND_V4L2_INT, V4L2_CID_HUE, "Standard UVC hue", 0, C200_MODEL_ANY},
+	{"white_balance_automatic", C200_CONTROL_KIND_V4L2_BOOL, V4L2_CID_AUTO_WHITE_BALANCE, "Standard UVC auto white balance", 0, C200_MODEL_ANY},
+	{"gamma", C200_CONTROL_KIND_V4L2_INT, V4L2_CID_GAMMA, "Standard UVC gamma", 0, C200_MODEL_ANY},
+	{"power_line_frequency", C200_CONTROL_KIND_V4L2_MENU, V4L2_CID_POWER_LINE_FREQUENCY, "Standard UVC power-line frequency", 0, C200_MODEL_ANY},
+	{"white_balance_temperature", C200_CONTROL_KIND_V4L2_INT, V4L2_CID_WHITE_BALANCE_TEMPERATURE, "Standard UVC white balance temperature", 0, C200_MODEL_ANY},
+	{"sharpness", C200_CONTROL_KIND_V4L2_INT, V4L2_CID_SHARPNESS, "Standard UVC sharpness", 0, C200_MODEL_ANY},
+	{"auto_exposure", C200_CONTROL_KIND_V4L2_MENU, V4L2_CID_EXPOSURE_AUTO, "Standard UVC auto exposure mode", 0, C200_MODEL_ANY},
+	{"exposure_time_absolute", C200_CONTROL_KIND_V4L2_INT, V4L2_CID_EXPOSURE_ABSOLUTE, "Standard UVC exposure time", 0, C200_MODEL_ANY},
+	{"pan_absolute", C200_CONTROL_KIND_V4L2_INT, V4L2_CID_PAN_ABSOLUTE, "Standard UVC pan", 0, C200_MODEL_ANY},
+	{"tilt_absolute", C200_CONTROL_KIND_V4L2_INT, V4L2_CID_TILT_ABSOLUTE, "Standard UVC tilt", 0, C200_MODEL_ANY},
+	{"focus_absolute", C200_CONTROL_KIND_V4L2_INT, V4L2_CID_FOCUS_ABSOLUTE, "Standard UVC focus", 0, C200_MODEL_ANY},
+	{"focus_automatic_continuous", C200_CONTROL_KIND_V4L2_BOOL, V4L2_CID_FOCUS_AUTO, "Standard UVC autofocus", 0, C200_MODEL_ANY},
+	{"zoom_absolute", C200_CONTROL_KIND_V4L2_INT, V4L2_CID_ZOOM_ABSOLUTE, "Standard UVC zoom", 0, C200_MODEL_ANY},
 };
 
 const struct c200_control_info *c200_find_control(const char *name)
@@ -39,6 +43,15 @@ const struct c200_control_info *c200_find_control(const char *name)
 	}
 
 	return NULL;
+}
+
+bool c200_control_supports_model(const struct c200_control_info *control, enum c200_model model)
+{
+	if (control == NULL) {
+		return false;
+	}
+
+	return (control->models & (unsigned int)model) != 0;
 }
 
 const struct c200_control_info *c200_all_controls(size_t *count)

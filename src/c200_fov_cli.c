@@ -1,4 +1,7 @@
+#include "c200_area_metering.h"
 #include "c200_controls.h"
+#include "c200_device.h"
+#include "c200_enable_u8.h"
 #include "c200_fov.h"
 #include "c200_vendor.h"
 
@@ -19,6 +22,9 @@ static void usage(FILE *stream, const char *argv0)
 	fprintf(stream, "Usage: %s [--device /dev/videoN] list-controls\n", argv0);
 	fprintf(stream, "       %s [--device /dev/videoN] get <control>\n", argv0);
 	fprintf(stream, "       %s [--device /dev/videoN] set <control> <value>\n", argv0);
+	fprintf(stream, "       %s [--device /dev/videoN] set exposure_smoothing <on|off>[,x,y,width,height]\n", argv0);
+	fprintf(stream, "       %s [--device /dev/videoN] set exposure_compensation <on|off>[,0..60]\n", argv0);
+	fprintf(stream, "exposure_smoothing, exposure_compensation and face_exposure are only accepted on an AnkerWork C310.\n");
 	fprintf(stream, "Compatibility aliases:\n");
 	fprintf(stream, "       %s [--device /dev/videoN] get-fov\n", argv0);
 	fprintf(stream, "       %s [--device /dev/videoN] set-fov <65|78|95|narrow|medium|wide|raw>\n", argv0);
@@ -33,6 +39,40 @@ static int open_device(const char *path, int flags)
 	}
 
 	return fd;
+}
+
+/*
+ * Refuse controls that are not known to work on the connected camera. Vendor
+ * selectors that only the C310 firmware implements must never be sent to a
+ * C200, so an unidentifiable device is treated as unsupported for them.
+ */
+static int check_control_supported(int fd, const struct c200_control_info *control, const char *device)
+{
+	struct c200_usb_id usb_id = {0};
+	enum c200_model model = C200_MODEL_UNKNOWN;
+	char supported[64];
+
+	if (control->models == C200_MODEL_ANY) {
+		return 0;
+	}
+
+	if (c200_device_get_usb_id(fd, &usb_id) == 0) {
+		model = c200_model_from_usb_id(&usb_id);
+	}
+
+	if (c200_control_supports_model(control, model)) {
+		return 0;
+	}
+
+	c200_model_mask_describe(control->models, supported, sizeof(supported));
+	if (model == C200_MODEL_UNKNOWN) {
+		fprintf(stderr, "control %s is only supported on %s; %s is not a recognised Anker camera (USB %04x:%04x)\n",
+			control->name, supported, device, usb_id.vendor_id, usb_id.product_id);
+	} else {
+		fprintf(stderr, "control %s is only supported on %s; %s is a %s (USB %04x:%04x)\n",
+			control->name, supported, device, c200_model_name(model), usb_id.vendor_id, usb_id.product_id);
+	}
+	return -1;
 }
 
 static int v4l2_get_value(int fd, uint32_t id, int32_t *value)
@@ -85,8 +125,16 @@ static int handle_get_control(int fd, const struct c200_control_info *control)
 	uint8_t u8_value = 0;
 	uint16_t u16_value = 0;
 	int32_t v4l2_value = 0;
+	struct c200_area_metering area_metering = {0};
+	struct c200_enable_u8 enable_u8 = {0};
 
 	switch (control->kind) {
+	case C200_CONTROL_KIND_VENDOR_ENABLE_U8:
+		if (c200_enable_u8_get(fd, (uint8_t)control->id, &enable_u8) < 0) {
+			return -1;
+		}
+		printf("%s\n", c200_enable_u8_describe_value(&enable_u8));
+		return 0;
 	case C200_CONTROL_KIND_VENDOR_BOOL:
 		if (c200_vendor_get_bool(fd, (uint8_t)control->id, &bool_value) < 0) {
 			return -1;
@@ -104,6 +152,12 @@ static int handle_get_control(int fd, const struct c200_control_info *control)
 			return -1;
 		}
 		printf("%s\n", c200_fov_describe_value(u16_value));
+		return 0;
+	case C200_CONTROL_KIND_VENDOR_AREA_METERING:
+		if (c200_area_metering_get(fd, &area_metering) < 0) {
+			return -1;
+		}
+		printf("%s\n", c200_area_metering_describe_value(&area_metering));
 		return 0;
 	case C200_CONTROL_KIND_V4L2_BOOL:
 		if (v4l2_get_value(fd, control->id, &v4l2_value) < 0) {
@@ -130,8 +184,20 @@ static int handle_set_control(int fd, const struct c200_control_info *control, c
 	uint8_t u8_value = 0;
 	uint16_t u16_value = 0;
 	int32_t v4l2_value = 0;
+	struct c200_area_metering area_metering = {0};
+	struct c200_enable_u8 enable_u8 = {0};
 
 	switch (control->kind) {
+	case C200_CONTROL_KIND_VENDOR_ENABLE_U8:
+		/* Pre-fill with the current state so "on"/"off"/bare numbers keep the other field. */
+		if (c200_enable_u8_get(fd, (uint8_t)control->id, &enable_u8) < 0) {
+			return -1;
+		}
+		if (!c200_enable_u8_parse_value(value_text, &enable_u8, control->max_value)) {
+			errno = EINVAL;
+			return -1;
+		}
+		return c200_enable_u8_set(fd, (uint8_t)control->id, &enable_u8);
 	case C200_CONTROL_KIND_VENDOR_BOOL:
 		if (!c200_parse_bool(value_text, &bool_value)) {
 			errno = EINVAL;
@@ -151,6 +217,16 @@ static int handle_set_control(int fd, const struct c200_control_info *control, c
 			return -1;
 		}
 		return c200_fov_set(fd, u16_value);
+	case C200_CONTROL_KIND_VENDOR_AREA_METERING:
+		/* Pre-fill with the current rectangle so "on"/"off" alone keeps it. */
+		if (c200_area_metering_get(fd, &area_metering) < 0) {
+			return -1;
+		}
+		if (!c200_area_metering_parse_value(value_text, &area_metering)) {
+			errno = EINVAL;
+			return -1;
+		}
+		return c200_area_metering_set(fd, &area_metering);
 	case C200_CONTROL_KIND_V4L2_BOOL:
 		if (!c200_parse_bool(value_text, &bool_value)) {
 			errno = EINVAL;
@@ -177,7 +253,10 @@ static void list_controls(void)
 	const struct c200_control_info *controls = c200_all_controls(&count);
 
 	for (i = 0; i < count; ++i) {
-		printf("%-28s %s\n", controls[i].name, controls[i].description);
+		char models[64];
+
+		c200_model_mask_describe(controls[i].models, models, sizeof(models));
+		printf("%-28s %-32s %s\n", controls[i].name, controls[i].models == C200_MODEL_ANY ? "all" : models, controls[i].description);
 	}
 }
 
@@ -187,6 +266,7 @@ int main(int argc, char **argv)
 	const char *command = NULL;
 	const struct c200_control_info *control = NULL;
 	const char *value_text = NULL;
+	char joined_value[128];
 	int argi = 1;
 	int fd = -1;
 
@@ -244,6 +324,11 @@ int main(int argc, char **argv)
 			return 1;
 		}
 
+		if (check_control_supported(fd, control, device) < 0) {
+			close(fd);
+			return 1;
+		}
+
 		if (handle_get_control(fd, control) < 0) {
 			fprintf(stderr, "failed to read %s from %s: %s\n", control->name, device, strerror(errno));
 			close(fd);
@@ -256,12 +341,39 @@ int main(int argc, char **argv)
 
 	if (strcmp(command, "set") == 0) {
 		if (control == NULL) {
-			if (argi + 2 != argc) {
+			if (argi + 2 > argc) {
 				usage(stderr, argv[0]);
 				return 2;
 			}
 			control = c200_find_control(argv[argi]);
 			value_text = argv[argi + 1];
+			if (argi + 2 != argc) {
+				/* Allow "set exposure_smoothing on 1600 900 640 360" or "set exposure_compensation on 20" as separate words. */
+				int extra = 0;
+				size_t used = 0;
+
+				if (control == NULL ||
+				    (control->kind != C200_CONTROL_KIND_VENDOR_AREA_METERING &&
+				     control->kind != C200_CONTROL_KIND_VENDOR_ENABLE_U8)) {
+					usage(stderr, argv[0]);
+					return 2;
+				}
+				joined_value[0] = '\0';
+				for (extra = argi + 1; extra < argc; ++extra) {
+					size_t needed = strlen(argv[extra]) + 2;
+
+					if (used + needed >= sizeof(joined_value)) {
+						usage(stderr, argv[0]);
+						return 2;
+					}
+					if (used > 0) {
+						joined_value[used++] = ',';
+					}
+					memcpy(joined_value + used, argv[extra], strlen(argv[extra]) + 1);
+					used += strlen(argv[extra]);
+				}
+				value_text = joined_value;
+			}
 		} else {
 			if (argi + 1 != argc) {
 				usage(stderr, argv[0]);
@@ -277,6 +389,11 @@ int main(int argc, char **argv)
 
 		fd = open_device(device, O_RDWR);
 		if (fd < 0) {
+			return 1;
+		}
+
+		if (check_control_supported(fd, control, device) < 0) {
+			close(fd);
 			return 1;
 		}
 

@@ -8,6 +8,8 @@ This project reverse engineers the vendor camera controls used by the official A
 
 Confirmed on an Anker PowerConf C200 with USB VID:PID `291a:3369`.
 
+Also works on an AnkerWork C310 with USB VID:PID `291a:3367` (firmware V2.21), which shares the same vendor extension unit.
+
 The current binary is:
 
 ```sh
@@ -27,6 +29,9 @@ Currently exposed controls:
 - `horizontal_flip`
 - `vertical_screen`
 - `anti_flicker`
+- `exposure_smoothing` (alias `area_metering`) – C310 only
+- `exposure_compensation` – C310 only
+- `face_exposure` – C310 only
 - `brightness`
 - `contrast`
 - `saturation`
@@ -43,6 +48,13 @@ Currently exposed controls:
 - `focus_absolute`
 - `focus_automatic_continuous`
 - `zoom_absolute`
+
+`list-controls` prints which models each control applies to. Before touching a model-specific control the CLI reads the camera's USB vendor/product ID from sysfs and refuses to send it to any other device, so the C310-only selectors are never issued to a PowerConf C200 (or to a non-Anker camera):
+
+```
+$ ./build/anker-powerconf-c200-linux-tools --device /dev/video0 set face_exposure on
+control face_exposure is only supported on AnkerWork C310; /dev/video0 is a PowerConf C200 (USB 291a:3369)
+```
 
 ## Reverse Engineering Notes
 
@@ -73,6 +85,50 @@ Other confirmed vendor selectors currently wired into the CLI:
 - `0x11`: `horizontal_flip`
 - `0x12`: `anti_flicker`
 - `0x13`: `hdr`
+- `0x18`: `exposure_smoothing` (area metering) – C310 only
+- `0x19`: `exposure_compensation` (vendor auto exposure + compensation) – C310 only
+- `0x0b`: `face_exposure` (FACE AE) – C310 only
+
+The three C310-only selectors were taken from the AnkerWork desktop app and verified on a C310. They have not been tested on a C200, so the CLI only accepts them when the connected camera reports USB ID `291a:3367`.
+
+### Exposure Smoothing (Area Metering)
+
+The AnkerWork app labels this control "Exposure Smoothing" in English, but internally it is `setAreaMetering()` / `getAreaMetering()` (the Chinese UI string is 区域测光, "area metering"). The camera meters exposure from the average brightness inside a rectangle instead of the whole frame.
+
+Confirmed by disassembling `AWDeviceInterface.dll` from AnkerWork 3.0.4 for Windows:
+
+- Unit ID: `0x06`
+- Selector: `0x18`
+- Linux `GET_LEN`: `9`
+
+Payload layout:
+
+- byte `0`: enable (`0x00` / `0x01`)
+- bytes `1..2`: x as `uint16_le`
+- bytes `3..4`: y as `uint16_le`
+- bytes `5..6`: width as `uint16_le`
+- bytes `7..8`: height as `uint16_le`
+
+The rectangle is always expressed on a fixed `3840x2160` grid regardless of the streaming resolution. The app's default region is `640x360` centered, i.e. `x=1600 y=900 width=640 height=360`.
+
+### Exposure Compensation and Face AE
+
+Two more selectors from the same DLL share a 2-byte `{ enable, value }` layout:
+
+- `0x19`: `setAutoExposure(enable, compensation)` – vendor auto exposure. `compensation` is 0..60 and the app treats 30 as neutral; lower values darken the image. Exposed as `exposure_compensation`.
+- `0x0b`: `setAutoFaceExposure(enable, value)` – FACE AE. The camera finds the face itself and meters on it, so unlike `exposure_smoothing` it keeps working when you move. Exposed as `face_exposure`.
+
+If your face is washed out against a darker background (classic backlit metering), `face_exposure on` is the automatic fix. `exposure_smoothing` with a rectangle over your face works too but only while you stay inside the box.
+
+Other selectors seen in the same DLL but not yet wired in:
+
+- `0x1c`: frame offset (`x, y, width, height` as `uint16_le`, 8 bytes)
+- `0x0c`: firmware version string, read-only
+- `0x0e`: serial number string, read-only
+
+### AnkerWork C310 (A3367)
+
+The C310 (`291a:3367`) exposes the same unit `0x06` extension unit GUID (`41769ea2-04de-e347-8b2b-f4341aff003b`) and the C200 selectors above work on it unchanged. `exposure_smoothing`, `exposure_compensation` and `face_exposure` are gated to the C310. It also carries three further extension units (IDs `3`, `7`, `8`) that this tool does not touch. Avoid issuing `GET_CUR` on unit `8` selector `0x08` (a 512-byte control): on firmware V2.21 it times out and leaves the camera unresponsive until it is power-cycled.
 
 ## Releases
 
@@ -119,6 +175,36 @@ Set a control:
 ./build/anker-powerconf-c200-linux-tools set horizontal_flip off
 ./build/anker-powerconf-c200-linux-tools set brightness 60
 ```
+
+Exposure smoothing takes an on/off value and an optional metering rectangle on the `3840x2160` grid. Without a rectangle, `on` keeps the camera's current rectangle (or the app default `1600 900 640 360` if none is set):
+
+```sh
+./build/anker-powerconf-c200-linux-tools get exposure_smoothing
+./build/anker-powerconf-c200-linux-tools set exposure_smoothing on
+./build/anker-powerconf-c200-linux-tools set exposure_smoothing on 1600 900 640 360
+./build/anker-powerconf-c200-linux-tools set exposure_smoothing on,1600,900,640,360
+./build/anker-powerconf-c200-linux-tools set exposure_smoothing off
+```
+
+Face AE and exposure compensation take `on`/`off`, optionally followed by a value (0..60). A bare number changes only the value:
+
+```sh
+./build/anker-powerconf-c200-linux-tools get face_exposure
+./build/anker-powerconf-c200-linux-tools set face_exposure on
+./build/anker-powerconf-c200-linux-tools set exposure_compensation on 20
+./build/anker-powerconf-c200-linux-tools set exposure_compensation 25
+```
+
+### Re-applying settings automatically
+
+The vendor controls do not survive a power cycle: after a replug the camera comes back with `exposure_smoothing` cleared, `face_exposure` off and `exposure_compensation` at 30. To re-apply your preferred settings whenever the camera is plugged in, install the binary somewhere stable and add a udev rule, for example `/etc/udev/rules.d/99-anker-webcam.rules`:
+
+```
+ACTION=="add", SUBSYSTEM=="video4linux", ATTRS{idVendor}=="291a", ATTRS{idProduct}=="3367", ATTR{index}=="0", \
+  RUN+="/usr/local/bin/anker-powerconf-c200-linux-tools --device /dev/%k set face_exposure on"
+```
+
+Use `idProduct` `3369` for the C200. `ATTR{index}=="0"` restricts the rule to the capture node (the second node of each UVC camera is metadata only and rejects extension-unit queries). Reload with `sudo udevadm control --reload` and replug the camera.
 
 Use a different device node:
 

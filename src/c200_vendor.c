@@ -56,6 +56,29 @@ static int c200_vendor_set_payload(int fd, uint8_t selector, uint8_t payload[C20
 	return c200_vendor_query(fd, selector, UVC_SET_CUR, size, payload);
 }
 
+int c200_vendor_get_raw(int fd, uint8_t selector, uint8_t payload[C200_VENDOR_MAX_PAYLOAD_SIZE], uint16_t *size)
+{
+	if (payload == NULL || size == NULL) {
+		errno = EINVAL;
+		return -1;
+	}
+
+	return c200_vendor_get_payload(fd, selector, payload, size);
+}
+
+int c200_vendor_set_raw(int fd, uint8_t selector, const uint8_t payload[C200_VENDOR_MAX_PAYLOAD_SIZE], uint16_t size)
+{
+	uint8_t copy[C200_VENDOR_MAX_PAYLOAD_SIZE];
+
+	if (payload == NULL || size == 0 || size > C200_VENDOR_MAX_PAYLOAD_SIZE) {
+		errno = EINVAL;
+		return -1;
+	}
+
+	memcpy(copy, payload, C200_VENDOR_MAX_PAYLOAD_SIZE);
+	return c200_vendor_set_payload(fd, selector, copy, size);
+}
+
 int c200_vendor_get_bool(int fd, uint8_t selector, bool *value)
 {
 	uint8_t payload[C200_VENDOR_MAX_PAYLOAD_SIZE];

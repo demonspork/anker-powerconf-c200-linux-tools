@@ -40,6 +40,9 @@ pub struct Control {
     pub inactive: bool,
     pub read_only: bool,
     pub error: Option<String>,
+    /// Ticked in the panel: written by "Save as" / "Overwrite". Load sets it to
+    /// match the file, so a profile round-trips the same set of controls.
+    pub include_in_profile: bool,
 }
 
 /// An open camera: a control fd plus the controls the model supports.
@@ -61,6 +64,7 @@ impl Camera {
         };
         camera.controls = table_for_model(model);
         camera.refresh_all();
+        camera.reset_profile_selection();
         Ok(camera)
     }
 
@@ -125,12 +129,49 @@ pub struct ApplyReport {
     pub skipped: Vec<String>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ProfileSelection {
+    /// Vendor controls plus every active standard control (the startup default).
+    Default,
+    All,
+    VendorOnly,
+    None,
+}
+
 impl Camera {
-    /// Current values of every writable control, in profile order.
+    pub fn is_vendor(control: &Control) -> bool {
+        control.kind <= ffi::KIND_VENDOR_ENABLE_U8
+    }
+
+    /// Vendor controls on, active standard controls on, inactive and read-only off.
+    pub fn reset_profile_selection(&mut self) {
+        self.select_for_profile(ProfileSelection::Default);
+    }
+
+    pub fn select_for_profile(&mut self, selection: ProfileSelection) {
+        select_controls(&mut self.controls, selection);
+    }
+
+    /// Tick exactly the controls a loaded profile names.
+    pub fn select_from_profile(&mut self, entries: &[(String, String)]) {
+        select_controls_from_profile(&mut self.controls, entries);
+    }
+
+    pub fn profile_selection_count(&self) -> (usize, usize) {
+        let selectable = self.controls.iter().filter(|c| !c.read_only).count();
+        let selected = self
+            .controls
+            .iter()
+            .filter(|c| c.include_in_profile && !c.read_only)
+            .count();
+        (selected, selectable)
+    }
+
+    /// Current values of the ticked controls, in profile order.
     pub fn export_profile(&self) -> Vec<(String, String)> {
         self.controls
             .iter()
-            .filter(|c| !c.read_only)
+            .filter(|c| !c.read_only && c.include_in_profile)
             .filter_map(|c| {
                 c.value
                     .as_ref()
@@ -217,6 +258,7 @@ fn table_for_model(model: i32) -> Vec<Control> {
                 inactive: false,
                 read_only: false,
                 error: None,
+                include_in_profile: false,
             });
         }
     }
@@ -355,4 +397,97 @@ pub fn list_modes(path: &str) -> Vec<ffi::CapMode> {
         std::cmp::Reverse((m.width * m.height, m.max_fps, m.fourcc == ffi::FOURCC_YUYV))
     });
     modes
+}
+
+pub fn select_controls(controls: &mut [Control], selection: ProfileSelection) {
+    for control in controls {
+        control.include_in_profile = !control.read_only
+            && match selection {
+                ProfileSelection::Default => Camera::is_vendor(control) || !control.inactive,
+                ProfileSelection::All => true,
+                ProfileSelection::VendorOnly => Camera::is_vendor(control),
+                ProfileSelection::None => false,
+            };
+    }
+}
+
+pub fn select_controls_from_profile(controls: &mut [Control], entries: &[(String, String)]) {
+    for control in controls {
+        control.include_in_profile = !control.read_only
+            && entries
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case(&control.name));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn control(name: &str, kind: i32, inactive: bool, read_only: bool) -> Control {
+        Control {
+            name: name.into(),
+            description: String::new(),
+            kind,
+            id: 0,
+            max_value: 0,
+            value: None,
+            inactive,
+            read_only,
+            error: None,
+            include_in_profile: false,
+        }
+    }
+
+    fn sample() -> Vec<Control> {
+        vec![
+            control("fov", ffi::KIND_VENDOR_FOV, false, false),
+            control("face_exposure", ffi::KIND_VENDOR_ENABLE_U8, false, false),
+            control("brightness", ffi::KIND_V4L2_INT, false, false),
+            control("exposure_time_absolute", ffi::KIND_V4L2_INT, true, false),
+            control("firmware", ffi::KIND_V4L2_INT, false, true),
+        ]
+    }
+
+    fn ticked(controls: &[Control]) -> Vec<&str> {
+        controls
+            .iter()
+            .filter(|c| c.include_in_profile)
+            .map(|c| c.name.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn quick_selections() {
+        let mut c = sample();
+        select_controls(&mut c, ProfileSelection::Default);
+        assert_eq!(ticked(&c), vec!["fov", "face_exposure", "brightness"]);
+        select_controls(&mut c, ProfileSelection::All);
+        assert_eq!(
+            ticked(&c),
+            vec![
+                "fov",
+                "face_exposure",
+                "brightness",
+                "exposure_time_absolute"
+            ]
+        );
+        select_controls(&mut c, ProfileSelection::VendorOnly);
+        assert_eq!(ticked(&c), vec!["fov", "face_exposure"]);
+        select_controls(&mut c, ProfileSelection::None);
+        assert!(ticked(&c).is_empty());
+    }
+
+    #[test]
+    fn load_ticks_exactly_the_file() {
+        let mut c = sample();
+        let entries = vec![
+            ("FACE_EXPOSURE".to_string(), "on,35".to_string()),
+            ("exposure_time_absolute".to_string(), "100".to_string()),
+            ("firmware".to_string(), "1".to_string()),
+            ("unknown".to_string(), "1".to_string()),
+        ];
+        select_controls_from_profile(&mut c, &entries);
+        assert_eq!(ticked(&c), vec!["face_exposure", "exposure_time_absolute"]);
+    }
 }

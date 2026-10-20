@@ -167,7 +167,18 @@ auto_exposure = 3
 brightness = 0
 ```
 
-When a profile is loaded, mode switches (menus and toggles) are applied before dependent values, controls the current camera does not have are skipped and reported, and the panel re-reads everything afterwards. The CLI applies the same files:
+**What gets saved.** Each control line in the panel has a tick box. "Save as" and "Overwrite" write only the ticked controls, so a profile pins exactly what you chose and nothing else. The row under the profile bar shows how many controls are ticked and offers four quick selections:
+
+- `default`: the Anker vendor controls plus every active standard control. Inactive controls (greyed out because another control overrides them, like manual exposure time under auto exposure) are left out. This is the selection when the app starts.
+- `all`: every writable control, inactive ones included.
+- `vendor only`: just the Anker controls (FOV, HDR, flip, anti-flicker, exposure smoothing, Face AE, exposure compensation).
+- `none`: untick everything and pick by hand.
+
+Read-only controls can never be ticked. Hovering the tick box, the buttons and the quick selections shows the same explanations as tooltips.
+
+**What loading does.** "Load" applies only the controls listed in the file; every other control keeps its current value. Mode switches (menus and toggles) are applied before dependent values, controls the current camera does not have are skipped and reported in the status line, and the panel re-reads everything afterwards. Load also ticks exactly the controls the file contains, so "Overwrite" after a Load writes the same set back, and a profile you edited by hand stays in step with the GUI.
+
+**Profiles layer.** Because a profile only touches what it lists, you can keep a small "base" profile (say FOV and HDR) for the udev rule to apply on every plug-in, and separate situational profiles (Face AE and compensation for a backlit desk) to load on top. The CLI applies the same files:
 
 ```sh
 ./build/anker-powerconf-c200-linux-tools --device /dev/video0 apply-profile ~/.config/anker-webcam-gui/profiles/meeting.profile

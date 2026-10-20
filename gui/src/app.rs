@@ -3,7 +3,7 @@
 use egui::{Color32, Rect, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions, Vec2};
 
 use crate::capture::Preview;
-use crate::controls::{fov_label, list_modes, Camera, ControlValue};
+use crate::controls::{fov_label, list_modes, Camera, ControlValue, ProfileSelection};
 use crate::devices::{find_cameras, CameraDevice};
 use crate::ffi;
 use crate::profiles::{sanitize_name, ProfileStore};
@@ -193,6 +193,7 @@ impl App {
             return;
         };
         let report = camera.apply_profile(&profile.entries);
+        camera.select_from_profile(&profile.entries);
         let mut message = format!("loaded '{name}': {} applied", report.applied);
         if !report.skipped.is_empty() {
             message.push_str(&format!(", skipped {}", report.skipped.join(", ")));
@@ -213,11 +214,14 @@ impl App {
     fn profile_bar(&mut self, ui: &mut egui::Ui) {
         let mut action: Option<ProfileAction> = None;
         ui.horizontal_wrapped(|ui| {
-            ui.label("Profile:");
             let current = self
                 .selected_profile
                 .and_then(|i| self.profile_names.get(i).cloned())
                 .unwrap_or_else(|| "(none)".to_string());
+            ui.label("Profile:").on_hover_text(format!(
+                "Profiles are plain text files in {}",
+                self.profiles.dir().display()
+            ));
             egui::ComboBox::from_id_salt("profile")
                 .selected_text(current)
                 .width(200.0)
@@ -236,13 +240,19 @@ impl App {
             let has_camera = self.camera.is_some();
             if ui
                 .add_enabled(has_selection && has_camera, egui::Button::new("Load"))
+                .on_hover_text(
+                    "Apply the profile to the camera. Only the controls listed in the file change; \
+                     everything else keeps its current value. Also ticks those controls in the panel.",
+                )
                 .clicked()
             {
                 action = Some(ProfileAction::Load);
             }
             if ui
                 .add_enabled(has_selection && has_camera, egui::Button::new("Overwrite"))
-                .on_hover_text("Save the camera's current settings over the selected profile")
+                .on_hover_text(
+                    "Replace the selected profile with the current values of the ticked controls.",
+                )
                 .clicked()
             {
                 action = Some(ProfileAction::Overwrite);
@@ -271,6 +281,9 @@ impl App {
             let submitted = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             if ui
                 .add_enabled(name_ok && has_camera, egui::Button::new("Save as"))
+                .on_hover_text(
+                    "Write a new profile containing the current values of the ticked controls only.",
+                )
                 .clicked()
                 || (submitted && name_ok && has_camera)
             {
@@ -278,10 +291,57 @@ impl App {
             }
             if ui
                 .button("Reload list")
-                .on_hover_text(self.profiles.dir().display().to_string())
+                .on_hover_text(format!(
+                    "Re-read the profiles folder: {}",
+                    self.profiles.dir().display()
+                ))
                 .clicked()
             {
                 action = Some(ProfileAction::Refresh);
+            }
+        });
+        ui.horizontal_wrapped(|ui| {
+            let (selected, selectable) = self
+                .camera
+                .as_ref()
+                .map(Camera::profile_selection_count)
+                .unwrap_or((0, 0));
+            ui.label(format!("Saving {selected} of {selectable} controls."))
+                .on_hover_text(
+                    "The tick box next to each control decides whether it goes into the profile.",
+                );
+            ui.label("Tick:");
+            let mut choice = None;
+            if ui
+                .small_button("default")
+                .on_hover_text("Vendor controls plus every active standard control; inactive (greyed) ones off.")
+                .clicked()
+            {
+                choice = Some(ProfileSelection::Default);
+            }
+            if ui
+                .small_button("all")
+                .on_hover_text("Every writable control, including inactive ones.")
+                .clicked()
+            {
+                choice = Some(ProfileSelection::All);
+            }
+            if ui
+                .small_button("vendor only")
+                .on_hover_text("Only the Anker vendor controls (FOV, HDR, Face AE, exposure smoothing, ...).")
+                .clicked()
+            {
+                choice = Some(ProfileSelection::VendorOnly);
+            }
+            if ui
+                .small_button("none")
+                .on_hover_text("Untick everything; pick controls by hand.")
+                .clicked()
+            {
+                choice = Some(ProfileSelection::None);
+            }
+            if let (Some(choice), Some(camera)) = (choice, self.camera.as_mut()) {
+                camera.select_for_profile(choice);
             }
         });
         if let Some((message, ok)) = &self.profile_status {
@@ -440,8 +500,19 @@ impl App {
                 let enabled = !control.inactive && !control.read_only;
                 let mut changed = false;
                 ui.add_space(4.0);
-                ui.label(egui::RichText::new(title).strong())
-                    .on_hover_text(&control.description);
+                ui.horizontal(|ui| {
+                    ui.add_enabled(
+                        !control.read_only,
+                        egui::Checkbox::without_text(&mut control.include_in_profile),
+                    )
+                    .on_hover_text(
+                        "Include in profile. Ticked controls are written by \"Save as\" and \"Overwrite\"; \
+                         unticked ones are left out, so loading the profile later leaves them untouched. \
+                         \"Load\" ticks exactly the controls the file contains.",
+                    );
+                    ui.label(egui::RichText::new(title).strong())
+                        .on_hover_text(&control.description);
+                });
                 ui.add_enabled_ui(enabled, |ui| {
                     if let Some(value) = control.value.as_mut() {
                         changed = control_widget(ui, &control.name, control.max_value, value);

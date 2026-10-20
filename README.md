@@ -205,6 +205,8 @@ The preview holds the capture node open, so stop it (or close the app) before a 
 
 The preview mode list is ordered largest first; on a C310 that puts `MJPG 3840x2160 @30` at the top. Three environment variables tweak startup: `ANKER_GUI_MODE="MJPG 3840x2160"` picks the initial preview mode, `ANKER_GUI_PROFILE=name` loads a profile, and `ANKER_GUI_SHOW_ALL=1` starts with "Show all cameras" ticked. For bug reports, `ANKER_GUI_SCREENSHOT=/path/shot.png` saves a picture of the window after three seconds and exits.
 
+On compositors that draw no title bars (Hyprland, niri, river, dwl) the window gets its own title row: drag it to move the window, double-click it to maximize, and use the maximize and close buttons at its right end. It is detected from `HYPRLAND_INSTANCE_SIGNATURE` and `XDG_CURRENT_DESKTOP`; set `ANKER_GUI_WINDOW_CONTROLS=1` or `0` to force it on or off, for example under a desktop that is not on that list. `Ctrl+Q` (or `Ctrl+W`) closes the window everywhere.
+
 ## Releases
 
 Prebuilt binaries are published on the GitHub Releases page:

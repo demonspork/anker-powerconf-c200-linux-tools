@@ -35,6 +35,9 @@ pub struct App {
     dirty: Vec<usize>,
     /// ANKER_GUI_SCREENSHOT=<file.png>: save the window after a few seconds and quit (dev aid).
     screenshot: Option<(String, std::time::Instant, bool)>,
+    /// Draw our own title row with close/maximize buttons (bare compositors such as Hyprland).
+    window_controls: bool,
+    maximized: bool,
 
     profiles: ProfileStore,
     profile_names: Vec<String>,
@@ -65,6 +68,8 @@ impl App {
                 .ok()
                 .filter(|p| !p.is_empty())
                 .map(|p| (p, std::time::Instant::now(), false)),
+            window_controls: wants_window_controls(),
+            maximized: false,
             profiles: ProfileStore::new(),
             profile_names: Vec::new(),
             selected_profile: None,
@@ -395,6 +400,83 @@ impl App {
         }
     }
 
+    /// Title row for sessions where the compositor draws no title bar: the title doubles as a
+    /// drag handle, and close/maximize buttons sit at the right edge.
+    fn title_bar(&mut self, ui: &mut egui::Ui) {
+        let height = 24.0;
+        let (rect, response) = ui.allocate_exact_size(
+            egui::vec2(ui.available_width(), height),
+            egui::Sense::click_and_drag(),
+        );
+        if response.drag_started() {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+        }
+        if response.double_clicked() {
+            self.maximized = !self.maximized;
+            ui.ctx()
+                .send_viewport_cmd(egui::ViewportCommand::Maximized(self.maximized));
+        }
+        let painter = ui.painter_at(rect);
+        painter.text(
+            egui::pos2(rect.left() + 6.0, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            "Anker Webcam Settings",
+            egui::FontId::proportional(14.0),
+            ui.visuals().strong_text_color(),
+        );
+        let mut child = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(rect)
+                .layout(egui::Layout::right_to_left(egui::Align::Center)),
+        );
+        // Icons are painted as strokes: egui's bundled fonts lack the window-button glyphs.
+        let button = |ui: &mut egui::Ui, hover: &str| {
+            let (rect, resp) =
+                ui.allocate_exact_size(egui::vec2(height, height), egui::Sense::click());
+            let resp = resp.on_hover_text(hover);
+            let visuals = ui.style().interact(&resp);
+            if resp.hovered() {
+                ui.painter().rect_filled(rect, 3.0, visuals.weak_bg_fill);
+            }
+            let stroke = egui::Stroke::new(1.5_f32, visuals.fg_stroke.color);
+            let icon = egui::Rect::from_center_size(rect.center(), egui::vec2(9.0, 9.0));
+            (resp.clicked(), icon, stroke)
+        };
+        let (close, icon, stroke) = button(&mut child, "Close (Ctrl+Q)");
+        child
+            .painter()
+            .line_segment([icon.left_top(), icon.right_bottom()], stroke);
+        child
+            .painter()
+            .line_segment([icon.right_top(), icon.left_bottom()], stroke);
+        if close {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+        let (maximize, icon, stroke) = button(&mut child, "Maximize / restore");
+        if self.maximized {
+            let back = icon.translate(egui::vec2(2.0, -2.0));
+            child
+                .painter()
+                .rect_stroke(back, 0.0, stroke, egui::StrokeKind::Inside);
+            let front = icon.translate(egui::vec2(-1.0, 1.0));
+            child
+                .painter()
+                .rect_filled(front, 0.0, ui.visuals().panel_fill);
+            child
+                .painter()
+                .rect_stroke(front, 0.0, stroke, egui::StrokeKind::Inside);
+        } else {
+            child
+                .painter()
+                .rect_stroke(icon, 0.0, stroke, egui::StrokeKind::Inside);
+        }
+        if maximize {
+            self.maximized = !self.maximized;
+            ui.ctx()
+                .send_viewport_cmd(egui::ViewportCommand::Maximized(self.maximized));
+        }
+    }
+
     fn top_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.label("Camera:");
@@ -700,6 +782,40 @@ impl App {
     }
 }
 
+/// Whether to draw our own title row with window buttons.
+///
+/// `ANKER_GUI_WINDOW_CONTROLS=1|0` forces it either way. Otherwise it is on under compositors
+/// that are known not to draw title bars (Hyprland, niri, river, dwl); KDE, GNOME and friends
+/// decorate the window themselves, so the row would only duplicate theirs.
+fn wants_window_controls() -> bool {
+    bare_compositor(
+        std::env::var("ANKER_GUI_WINDOW_CONTROLS").ok().as_deref(),
+        std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some(),
+        std::env::var("XDG_CURRENT_DESKTOP").ok().as_deref(),
+    )
+}
+
+fn bare_compositor(forced: Option<&str>, hyprland: bool, desktop: Option<&str>) -> bool {
+    match forced.map(str::trim) {
+        Some("1") | Some("true") | Some("yes") | Some("on") => return true,
+        Some("0") | Some("false") | Some("no") | Some("off") => return false,
+        _ => {}
+    }
+    if hyprland {
+        return true;
+    }
+    desktop
+        .unwrap_or("")
+        .split(':')
+        .map(|d| d.trim().to_ascii_lowercase())
+        .any(|d| {
+            matches!(
+                d.as_str(),
+                "hyprland" | "niri" | "river" | "dwl" | "mangowc"
+            )
+        })
+}
+
 /// Honour ANKER_GUI_MODE, e.g. "MJPG 3840x2160", for the initial preview mode.
 fn requested_mode(modes: &[ffi::CapMode]) -> Option<usize> {
     let wanted = std::env::var("ANKER_GUI_MODE").ok()?;
@@ -952,7 +1068,20 @@ impl eframe::App for App {
             self.start_preview();
         }
 
+        if ctx.input_mut(|i| {
+            i.consume_key(egui::Modifiers::CTRL, egui::Key::Q)
+                || i.consume_key(egui::Modifiers::CTRL, egui::Key::W)
+        }) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+        self.maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(self.maximized));
+
         egui::TopBottomPanel::top("top").show(ctx, |ui| {
+            if self.window_controls {
+                ui.add_space(2.0);
+                self.title_bar(ui);
+                ui.separator();
+            }
             ui.add_space(4.0);
             self.top_bar(ui);
             ui.add_space(2.0);
@@ -984,5 +1113,26 @@ impl eframe::App for App {
         }
 
         self.flush_dirty(ctx);
+    }
+}
+
+#[cfg(test)]
+mod window_control_tests {
+    use super::bare_compositor;
+
+    #[test]
+    fn forced_setting_wins() {
+        assert!(bare_compositor(Some("1"), false, Some("KDE")));
+        assert!(!bare_compositor(Some("0"), true, Some("Hyprland")));
+    }
+
+    #[test]
+    fn detects_bare_compositors() {
+        assert!(bare_compositor(None, true, None));
+        assert!(bare_compositor(None, false, Some("Hyprland")));
+        assert!(bare_compositor(None, false, Some("niri")));
+        assert!(!bare_compositor(None, false, Some("KDE")));
+        assert!(!bare_compositor(None, false, Some("GNOME:ubuntu")));
+        assert!(!bare_compositor(None, false, None));
     }
 }

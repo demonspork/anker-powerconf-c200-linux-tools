@@ -22,6 +22,8 @@ pub struct App {
     texture: Option<TextureHandle>,
     preview_wanted: bool,
     show_all_cameras: bool,
+    /// The selected camera is streaming in another process; the preview pane is hidden.
+    camera_busy: bool,
 
     /// Controls edited this frame; written once the pointer is released.
     dirty: Vec<usize>,
@@ -42,6 +44,7 @@ impl App {
             texture: None,
             preview_wanted: true,
             show_all_cameras: std::env::var_os("ANKER_GUI_SHOW_ALL").is_some(),
+            camera_busy: false,
             dirty: Vec::new(),
         };
         app.rescan();
@@ -65,6 +68,7 @@ impl App {
         self.texture = None;
         self.camera = None;
         self.open_error = None;
+        self.camera_busy = false;
         self.modes.clear();
         let Some(device) = self.devices.get(self.selected_device).cloned() else {
             return;
@@ -86,6 +90,7 @@ impl App {
     fn start_preview(&mut self) {
         self.preview = None;
         self.texture = None;
+        self.camera_busy = false;
         let (Some(device), Some(mode)) = (
             self.devices.get(self.selected_device),
             self.modes.get(self.selected_mode),
@@ -170,7 +175,14 @@ impl App {
                 self.start_preview();
             }
             let running = self.preview.is_some();
-            if ui.button(if running { "Stop preview" } else { "Start preview" }).clicked() {
+            let button = if running {
+                "Stop preview"
+            } else if self.camera_busy {
+                "Retry preview"
+            } else {
+                "Start preview"
+            };
+            if ui.button(button).clicked() {
                 self.preview_wanted = !running;
                 if running {
                     self.preview = None;
@@ -178,6 +190,9 @@ impl App {
                 } else {
                     self.start_preview();
                 }
+            }
+            if self.camera_busy {
+                ui.colored_label(Color32::KHAKI, "camera in use by another application; preview hidden, controls still work");
             }
         });
     }
@@ -518,8 +533,14 @@ fn control_widget(ui: &mut egui::Ui, name: &str, max_value: u8, value: &mut Cont
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if self.preview.as_ref().is_some_and(|p| p.is_busy()) {
+            self.preview = None;
+            self.texture = None;
+            self.camera_busy = true;
+        }
         if self.preview_wanted
             && self.preview.is_none()
+            && !self.camera_busy
             && self.camera.is_some()
             && !self.modes.is_empty()
         {
@@ -531,18 +552,29 @@ impl eframe::App for App {
             self.top_bar(ui);
             ui.add_space(4.0);
         });
-        egui::SidePanel::left("controls")
-            .default_width(380.0)
-            .min_width(300.0)
-            .show(ctx, |ui| {
+        if self.camera_busy {
+            // No preview to show: let the controls take the whole window.
+            egui::CentralPanel::default().show(ctx, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
+                    ui.set_max_width(520.0);
                     self.control_panel(ui);
                     ui.add_space(12.0);
                 });
             });
-        egui::CentralPanel::default().show(ctx, |ui| {
-            self.preview_panel(ui);
-        });
+        } else {
+            egui::SidePanel::left("controls")
+                .default_width(380.0)
+                .min_width(300.0)
+                .show(ctx, |ui| {
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        self.control_panel(ui);
+                        ui.add_space(12.0);
+                    });
+                });
+            egui::CentralPanel::default().show(ctx, |ui| {
+                self.preview_panel(ui);
+            });
+        }
 
         self.flush_dirty(ctx);
     }

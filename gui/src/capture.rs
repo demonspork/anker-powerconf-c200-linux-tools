@@ -14,6 +14,8 @@ use crate::ffi;
 pub struct Shared {
     pub frame: Option<ColorImage>,
     pub error: Option<String>,
+    /// The device is streaming in another process (EBUSY on setup).
+    pub busy: bool,
     pub width: u32,
     pub height: u32,
     pub fourcc: u32,
@@ -56,6 +58,11 @@ impl Preview {
             Ok(s) => (s.error.clone(), s.width, s.height, s.fourcc, s.fps),
             Err(_) => (Some("capture thread panicked".into()), 0, 0, 0, 0.0),
         }
+    }
+
+    /// True once the capture thread found the device streaming elsewhere.
+    pub fn is_busy(&self) -> bool {
+        self.shared.lock().map(|s| s.busy).unwrap_or(false)
     }
 
     pub fn stop(&mut self) {
@@ -104,9 +111,19 @@ fn capture_loop(
     if cap.is_null() {
         let os = std::io::Error::last_os_error();
         let stage = unsafe { ffi::cstr_to_string(stage.as_ptr()) };
-        let message = format!("{path}: {stage} failed: {os}");
+        let busy = os.raw_os_error() == Some(16); // EBUSY: another process is streaming
+        let message = if busy {
+            format!(
+                "{path} is in use by another application; preview unavailable, controls still work"
+            )
+        } else {
+            format!("{path}: {stage} failed: {os}")
+        };
         eprintln!("preview: {message}");
-        set_error(shared, message);
+        if let Ok(mut s) = shared.lock() {
+            s.busy = busy;
+            s.error = Some(message);
+        }
         ctx.request_repaint();
         return;
     }

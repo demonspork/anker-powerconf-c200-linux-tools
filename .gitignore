@@ -9,3 +9,6 @@ AnkerWork_Official.dmg
 *.core
 core
 gui/target/
+packaging/arch/src/
+packaging/arch/pkg/
+packaging/arch/*.pkg.tar.*

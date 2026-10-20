@@ -111,6 +111,79 @@ impl Camera {
     }
 }
 
+/// Apply order for profiles: mode switches first so dependent controls become active.
+fn apply_rank(kind: i32) -> u8 {
+    match kind {
+        ffi::KIND_V4L2_MENU | ffi::KIND_V4L2_BOOL => 0,
+        ffi::KIND_V4L2_INT => 1,
+        _ => 2,
+    }
+}
+
+pub struct ApplyReport {
+    pub applied: usize,
+    pub skipped: Vec<String>,
+}
+
+impl Camera {
+    /// Current values of every writable control, in profile order.
+    pub fn export_profile(&self) -> Vec<(String, String)> {
+        self.controls
+            .iter()
+            .filter(|c| !c.read_only)
+            .filter_map(|c| {
+                c.value
+                    .as_ref()
+                    .map(|v| (c.name.clone(), crate::profiles::value_to_text(v)))
+            })
+            .collect()
+    }
+
+    /// Write profile entries to the camera; unknown or unsupported names are reported, not fatal.
+    pub fn apply_profile(&mut self, entries: &[(String, String)]) -> ApplyReport {
+        let mut report = ApplyReport {
+            applied: 0,
+            skipped: Vec::new(),
+        };
+        let mut planned: Vec<(usize, ControlValue)> = Vec::new();
+        for (name, text) in entries {
+            let Some(index) = self
+                .controls
+                .iter()
+                .position(|c| c.name.eq_ignore_ascii_case(name))
+            else {
+                report.skipped.push(format!("{name} (not on this camera)"));
+                continue;
+            };
+            let control = &self.controls[index];
+            if control.read_only {
+                report.skipped.push(format!("{name} (read-only)"));
+                continue;
+            }
+            let Some(current) = control.value.as_ref() else {
+                report.skipped.push(format!("{name} (unreadable)"));
+                continue;
+            };
+            match crate::profiles::text_to_value(text, current) {
+                Some(value) => planned.push((index, value)),
+                None => report.skipped.push(format!("{name} (bad value '{text}')")),
+            }
+        }
+        planned.sort_by_key(|(index, _)| apply_rank(self.controls[*index].kind));
+        for (index, value) in planned {
+            self.write(index, &value);
+            match &self.controls[index].error {
+                Some(error) => report
+                    .skipped
+                    .push(format!("{} ({error})", self.controls[index].name)),
+                None => report.applied += 1,
+            }
+        }
+        self.refresh_all();
+        report
+    }
+}
+
 fn table_for_model(model: i32) -> Vec<Control> {
     let mut controls = Vec::new();
     let mut seen: Vec<(i32, u32)> = Vec::new();

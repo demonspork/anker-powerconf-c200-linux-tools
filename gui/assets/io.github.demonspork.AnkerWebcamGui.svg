@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2b3a4a"/>
+      <stop offset="1" stop-color="#101820"/>
+    </linearGradient>
+    <radialGradient id="iris" cx="0.4" cy="0.35" r="0.75">
+      <stop offset="0" stop-color="#3b82f6"/>
+      <stop offset="0.55" stop-color="#1e3a8a"/>
+      <stop offset="1" stop-color="#0b1220"/>
+    </radialGradient>
+    <radialGradient id="glint" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.9"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <!-- body -->
+  <rect x="8" y="8" width="240" height="240" rx="52" fill="url(#bg)"/>
+  <!-- lens barrel -->
+  <circle cx="128" cy="128" r="88" fill="#0b0f14" stroke="#9fb3c8" stroke-width="7"/>
+  <circle cx="128" cy="128" r="70" fill="url(#iris)"/>
+  <circle cx="128" cy="128" r="32" fill="#020617"/>
+  <ellipse cx="104" cy="98" rx="22" ry="14" fill="url(#glint)" transform="rotate(-30 104 98)"/>
+  <!-- face-metering brackets -->
+  <g fill="none" stroke="#facc15" stroke-width="10" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M40 76 V48 Q40 40 48 40 H76"/>
+    <path d="M180 40 H208 Q216 40 216 48 V76"/>
+    <path d="M216 180 V208 Q216 216 208 216 H180"/>
+    <path d="M76 216 H48 Q40 216 40 208 V180"/>
+  </g>
+</svg>

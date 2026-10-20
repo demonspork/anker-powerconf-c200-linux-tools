@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Anker Webcam Settings
+GenericName=Webcam Settings
+Comment=Adjust Anker PowerConf C200 / AnkerWork C310 webcam settings with a live preview
+Exec=anker-webcam-gui
+Icon=io.github.demonspork.AnkerWebcamGui
+Terminal=false
+Categories=AudioVideo;Video;
+Keywords=webcam;camera;anker;uvc;exposure;
+StartupWMClass=anker-webcam-gui

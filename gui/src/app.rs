@@ -6,6 +6,7 @@ use crate::capture::Preview;
 use crate::controls::{fov_label, list_modes, Camera, ControlValue};
 use crate::devices::{find_cameras, CameraDevice};
 use crate::ffi;
+use crate::profiles::{sanitize_name, ProfileStore};
 
 const FOV_PRESETS: [(u16, &str); 3] = [(65, "Narrow"), (78, "Medium"), (95, "Wide")];
 
@@ -27,6 +28,13 @@ pub struct App {
 
     /// Controls edited this frame; written once the pointer is released.
     dirty: Vec<usize>,
+
+    profiles: ProfileStore,
+    profile_names: Vec<String>,
+    selected_profile: Option<usize>,
+    new_profile_name: String,
+    profile_status: Option<(String, bool)>,
+    confirm_delete: bool,
 }
 
 impl App {
@@ -46,7 +54,14 @@ impl App {
             show_all_cameras: std::env::var_os("ANKER_GUI_SHOW_ALL").is_some(),
             camera_busy: false,
             dirty: Vec::new(),
+            profiles: ProfileStore::new(),
+            profile_names: Vec::new(),
+            selected_profile: None,
+            new_profile_name: String::new(),
+            profile_status: None,
+            confirm_delete: false,
         };
+        app.refresh_profiles();
         app.rescan();
         app
     }
@@ -79,6 +94,13 @@ impl App {
                 self.open_error = Some(format!("{}: {e}", device.path));
                 return;
             }
+        }
+        if let Some(name) = std::env::var("ANKER_GUI_PROFILE")
+            .ok()
+            .filter(|n| !n.is_empty())
+        {
+            self.load_profile(&name);
+            self.selected_profile = self.profile_names.iter().position(|n| *n == name);
         }
         self.modes = list_modes(&device.path);
         self.selected_mode =
@@ -115,6 +137,190 @@ impl App {
             if let Some(value) = camera.controls.get(index).and_then(|c| c.value.clone()) {
                 camera.write(index, &value);
             }
+        }
+    }
+
+    fn refresh_profiles(&mut self) {
+        let previous = self
+            .selected_profile
+            .and_then(|i| self.profile_names.get(i).cloned());
+        self.profile_names = self.profiles.list();
+        self.selected_profile =
+            previous.and_then(|p| self.profile_names.iter().position(|n| *n == p));
+        self.confirm_delete = false;
+    }
+
+    fn set_profile_status(&mut self, message: String, ok: bool) {
+        self.profile_status = Some((message, ok));
+    }
+
+    fn save_profile(&mut self, name: &str) {
+        let (Some(camera), Some(device)) =
+            (self.camera.as_ref(), self.devices.get(self.selected_device))
+        else {
+            self.set_profile_status("no camera open".into(), false);
+            return;
+        };
+        let entries = camera.export_profile();
+        let model = if device.model == ffi::MODEL_UNKNOWN {
+            device.name.clone()
+        } else {
+            device.model_name.clone()
+        };
+        let result = self.profiles.save(name, &model, &entries);
+        match result {
+            Ok(()) => {
+                let count = entries.len();
+                self.set_profile_status(format!("saved '{name}' ({count} controls)"), true);
+                self.refresh_profiles();
+                self.selected_profile = self.profile_names.iter().position(|n| n == name);
+                self.new_profile_name.clear();
+            }
+            Err(e) => self.set_profile_status(format!("could not save '{name}': {e}"), false),
+        }
+    }
+
+    fn load_profile(&mut self, name: &str) {
+        let profile = match self.profiles.load(name) {
+            Ok(profile) => profile,
+            Err(e) => {
+                self.set_profile_status(format!("could not read '{name}': {e}"), false);
+                return;
+            }
+        };
+        let Some(camera) = self.camera.as_mut() else {
+            self.set_profile_status("no camera open".into(), false);
+            return;
+        };
+        let report = camera.apply_profile(&profile.entries);
+        let mut message = format!("loaded '{name}': {} applied", report.applied);
+        if !report.skipped.is_empty() {
+            message.push_str(&format!(", skipped {}", report.skipped.join(", ")));
+        }
+        let ok = report.skipped.is_empty();
+        self.set_profile_status(message, ok);
+    }
+
+    fn delete_profile(&mut self, name: &str) {
+        let result = self.profiles.delete(name);
+        match result {
+            Ok(()) => self.set_profile_status(format!("deleted '{name}'"), true),
+            Err(e) => self.set_profile_status(format!("could not delete '{name}': {e}"), false),
+        }
+        self.refresh_profiles();
+    }
+
+    fn profile_bar(&mut self, ui: &mut egui::Ui) {
+        let mut action: Option<ProfileAction> = None;
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Profile:");
+            let current = self
+                .selected_profile
+                .and_then(|i| self.profile_names.get(i).cloned())
+                .unwrap_or_else(|| "(none)".to_string());
+            egui::ComboBox::from_id_salt("profile")
+                .selected_text(current)
+                .width(200.0)
+                .show_ui(ui, |ui| {
+                    for (i, name) in self.profile_names.iter().enumerate() {
+                        if ui
+                            .selectable_label(self.selected_profile == Some(i), name)
+                            .clicked()
+                        {
+                            self.selected_profile = Some(i);
+                            self.confirm_delete = false;
+                        }
+                    }
+                });
+            let has_selection = self.selected_profile.is_some();
+            let has_camera = self.camera.is_some();
+            if ui
+                .add_enabled(has_selection && has_camera, egui::Button::new("Load"))
+                .clicked()
+            {
+                action = Some(ProfileAction::Load);
+            }
+            if ui
+                .add_enabled(has_selection && has_camera, egui::Button::new("Overwrite"))
+                .on_hover_text("Save the camera's current settings over the selected profile")
+                .clicked()
+            {
+                action = Some(ProfileAction::Overwrite);
+            }
+            if self.confirm_delete {
+                ui.label("delete?");
+                if ui.button("Yes").clicked() {
+                    action = Some(ProfileAction::Delete);
+                }
+                if ui.button("No").clicked() {
+                    self.confirm_delete = false;
+                }
+            } else if ui
+                .add_enabled(has_selection, egui::Button::new("Delete"))
+                .clicked()
+            {
+                self.confirm_delete = true;
+            }
+            ui.separator();
+            let edit = ui.add(
+                egui::TextEdit::singleline(&mut self.new_profile_name)
+                    .hint_text("new profile name")
+                    .desired_width(160.0),
+            );
+            let name_ok = sanitize_name(&self.new_profile_name).is_some();
+            let submitted = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if ui
+                .add_enabled(name_ok && has_camera, egui::Button::new("Save as"))
+                .clicked()
+                || (submitted && name_ok && has_camera)
+            {
+                action = Some(ProfileAction::SaveAs);
+            }
+            if ui
+                .button("Reload list")
+                .on_hover_text(self.profiles.dir().display().to_string())
+                .clicked()
+            {
+                action = Some(ProfileAction::Refresh);
+            }
+        });
+        if let Some((message, ok)) = &self.profile_status {
+            ui.colored_label(
+                if *ok {
+                    Color32::LIGHT_GREEN
+                } else {
+                    Color32::KHAKI
+                },
+                message,
+            );
+        }
+
+        let selected = self
+            .selected_profile
+            .and_then(|i| self.profile_names.get(i).cloned());
+        match action {
+            Some(ProfileAction::Load) => {
+                if let Some(name) = selected {
+                    self.load_profile(&name);
+                }
+            }
+            Some(ProfileAction::Overwrite) => {
+                if let Some(name) = selected {
+                    self.save_profile(&name);
+                }
+            }
+            Some(ProfileAction::Delete) => {
+                if let Some(name) = selected {
+                    self.delete_profile(&name);
+                }
+            }
+            Some(ProfileAction::SaveAs) => {
+                if let Some(name) = sanitize_name(&self.new_profile_name) {
+                    self.save_profile(&name);
+                }
+            }
+            Some(ProfileAction::Refresh) => self.refresh_profiles(),
+            None => {}
         }
     }
 
@@ -407,6 +613,14 @@ fn default_mode(modes: &[ffi::CapMode]) -> usize {
         .unwrap_or(0)
 }
 
+enum ProfileAction {
+    Load,
+    Overwrite,
+    Delete,
+    SaveAs,
+    Refresh,
+}
+
 /// Draw the widget for one control value. Returns true if the user changed it.
 fn control_widget(ui: &mut egui::Ui, name: &str, max_value: u8, value: &mut ControlValue) -> bool {
     match value {
@@ -563,6 +777,8 @@ impl eframe::App for App {
         egui::TopBottomPanel::top("top").show(ctx, |ui| {
             ui.add_space(4.0);
             self.top_bar(ui);
+            ui.add_space(2.0);
+            self.profile_bar(ui);
             ui.add_space(4.0);
         });
         if self.camera_busy {

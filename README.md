@@ -149,10 +149,50 @@ Features:
 - The exposure smoothing rectangle is drawn over the preview and can be dragged into place; the size is set with the spinners.
 - Standard UVC controls show the driver's range and default, and grey out when another control overrides them (manual exposure under auto exposure, for example).
 - Values are written when you release the slider or box, then read back so the panel shows what the camera accepted.
+- Settings profiles: save the camera's current settings under a name, load them back, overwrite or delete them. Profiles live in `~/.config/anker-webcam-gui/profiles/*.profile` (or under `$XDG_CONFIG_HOME`).
+
+### Profiles
+
+A profile is a plain text file of `control = value` lines using the same value syntax as the CLI, for example:
+
+```
+# Anker webcam settings profile
+model = AnkerWork C310
+fov = 95
+hdr = off
+face_exposure = on,35
+exposure_compensation = on,30
+exposure_smoothing = off,1600,900,640,360
+auto_exposure = 3
+brightness = 0
+```
+
+When a profile is loaded, mode switches (menus and toggles) are applied before dependent values, controls the current camera does not have are skipped and reported, and the panel re-reads everything afterwards. The CLI applies the same files:
+
+```sh
+./build/anker-powerconf-c200-linux-tools --device /dev/video0 apply-profile ~/.config/anker-webcam-gui/profiles/meeting.profile
+```
+
+Because the vendor settings reset on every replug, pointing the udev rule below at a profile re-applies all of them at once. `ANKER_GUI_PROFILE=meeting` loads a profile when the GUI starts.
+
+### Installing
+
+`make install` in `gui/` installs the binary, the `.desktop` entry, the AppStream metainfo and the icon (SVG plus hicolor PNG sizes) under `PREFIX` (default `/usr/local`), honouring `DESTDIR`. From the repository root:
+
+```sh
+make                              # CLI
+make gui                          # GUI (cargo build --release)
+sudo make install install-gui     # both, PREFIX=/usr/local
+```
+
+Packaging files are in `packaging/`:
+
+- `packaging/arch/PKGBUILD`: a `-git` package; `cd packaging/arch && makepkg -si`.
+- `packaging/fedora/anker-webcam-tools.spec`: uses the Fedora Rust macros with a vendored crate tarball; run `packaging/fedora/make-sources.sh` (needs the `v<version>` tag) then `rpmbuild -ba packaging/fedora/anker-webcam-tools.spec`.
 
 The preview holds the capture node open, so stop it (or close the app) before a video call needs the camera. If another application already holds the camera, the preview pane is hidden and the controls still work.
 
-The preview mode list is ordered largest first; on a C310 that puts `MJPG 3840x2160 @30` at the top. Two environment variables tweak startup: `ANKER_GUI_MODE="MJPG 3840x2160"` picks the initial preview mode, and `ANKER_GUI_SHOW_ALL=1` starts with "Show all cameras" ticked.
+The preview mode list is ordered largest first; on a C310 that puts `MJPG 3840x2160 @30` at the top. Three environment variables tweak startup: `ANKER_GUI_MODE="MJPG 3840x2160"` picks the initial preview mode, `ANKER_GUI_PROFILE=name` loads a profile, and `ANKER_GUI_SHOW_ALL=1` starts with "Show all cameras" ticked.
 
 ## Releases
 
@@ -188,6 +228,12 @@ Read a control:
 ./build/anker-powerconf-c200-linux-tools get fov
 ./build/anker-powerconf-c200-linux-tools get hdr
 ./build/anker-powerconf-c200-linux-tools get brightness
+```
+
+Apply a saved profile (see the GUI section for the file format):
+
+```sh
+./build/anker-powerconf-c200-linux-tools apply-profile meeting.profile
 ```
 
 Set a control:
@@ -226,6 +272,13 @@ The vendor controls do not survive a power cycle: after a replug the camera come
 ```
 ACTION=="add", SUBSYSTEM=="video4linux", ATTRS{idVendor}=="291a", ATTRS{idProduct}=="3367", ATTR{index}=="0", \
   RUN+="/usr/local/bin/anker-powerconf-c200-linux-tools --device /dev/%k set face_exposure on"
+```
+
+To restore a whole saved profile instead of one control, copy it somewhere root can read (udev runs as root, before your home directory is necessarily available) and use `apply-profile`:
+
+```
+ACTION=="add", SUBSYSTEM=="video4linux", ATTRS{idVendor}=="291a", ATTRS{idProduct}=="3367", ATTR{index}=="0", \
+  RUN+="/usr/local/bin/anker-powerconf-c200-linux-tools --device /dev/%k apply-profile /etc/anker-webcam/c310.profile"
 ```
 
 Use `idProduct` `3369` for the C200. `ATTR{index}=="0"` restricts the rule to the capture node (the second node of each UVC camera is metadata only and rejects extension-unit queries). Reload with `sudo udevadm control --reload` and replug the camera.

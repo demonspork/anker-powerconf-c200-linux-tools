@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.demonspork.AnkerWebcamGui</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Anker Webcam Settings</name>
+  <developer id="io.github.demonspork">
+    <name>Michael Suiter</name>
+  </developer>
+  <summary>Adjust Anker PowerConf C200 and AnkerWork C310 webcams on Linux</summary>
+  <description>
+    <p>
+      A small settings panel for Anker PowerConf C200 and AnkerWork C310 webcams.
+      It exposes the vendor controls the official Windows and macOS app offers
+      (field of view, HDR, exposure smoothing, Face AE, exposure compensation and more)
+      alongside the standard UVC controls, with a live preview so you can see the effect.
+    </p>
+    <p>
+      Settings profiles can be saved and restored, and the bundled command-line tool
+      can re-apply a profile automatically when the camera is plugged in.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.demonspork.AnkerWebcamGui.desktop</launchable>
+  <provides>
+    <binary>anker-webcam-gui</binary>
+    <binary>anker-powerconf-c200-linux-tools</binary>
+  </provides>
+  <url type="homepage">https://github.com/demonspork/anker-powerconf-c200-linux-tools</url>
+  <url type="bugtracker">https://github.com/demonspork/anker-powerconf-c200-linux-tools/issues</url>
+  <content_rating type="oars-1.1"/>
+  <categories>
+    <category>AudioVideo</category>
+    <category>Video</category>
+    <category>Settings</category>
+  </categories>
+  <releases>
+    <release version="0.2.0" date="2026-10-19"/>
+  </releases>
+</component>

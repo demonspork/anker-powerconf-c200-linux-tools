@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <time.h>
 #include <linux/videodev2.h>
 #include <sys/ioctl.h>
@@ -24,6 +25,7 @@ static void usage(FILE *stream, const char *argv0)
 	fprintf(stream, "       %s [--device /dev/videoN] set <control> <value>\n", argv0);
 	fprintf(stream, "       %s [--device /dev/videoN] set exposure_smoothing <on|off>[,x,y,width,height]\n", argv0);
 	fprintf(stream, "       %s [--device /dev/videoN] set exposure_compensation <on|off>[,0..60]\n", argv0);
+	fprintf(stream, "       %s [--device /dev/videoN] apply-profile <file>\n", argv0);
 	fprintf(stream, "exposure_smoothing, exposure_compensation and face_exposure are only accepted on an AnkerWork C310.\n");
 	fprintf(stream, "Compatibility aliases:\n");
 	fprintf(stream, "       %s [--device /dev/videoN] get-fov\n", argv0);
@@ -246,6 +248,85 @@ static int handle_set_control(int fd, const struct c200_control_info *control, c
 	return -1;
 }
 
+/*
+ * Apply a settings profile: a text file of "control = value" lines as written by
+ * the GUI (lines starting with '#' and the "model = ..." line are ignored).
+ * Controls that are unknown, unsupported on this camera or rejected are reported
+ * and skipped; the return value is the number of failures.
+ */
+static int apply_profile(int fd, const char *device, const char *path)
+{
+	FILE *file = fopen(path, "r");
+	char line[256];
+	int line_number = 0;
+	int applied = 0;
+	int failed = 0;
+
+	if (file == NULL) {
+		fprintf(stderr, "failed to open %s: %s\n", path, strerror(errno));
+		return 1;
+	}
+
+	while (fgets(line, sizeof(line), file) != NULL) {
+		char *key = line;
+		char *value = NULL;
+		char *end = NULL;
+		const struct c200_control_info *control = NULL;
+
+		++line_number;
+		while (*key == ' ' || *key == '\t') {
+			++key;
+		}
+		end = key + strlen(key);
+		while (end > key && (end[-1] == '\n' || end[-1] == '\r' || end[-1] == ' ' || end[-1] == '\t')) {
+			*--end = '\0';
+		}
+		if (*key == '\0' || *key == '#') {
+			continue;
+		}
+
+		value = strchr(key, '=');
+		if (value == NULL) {
+			fprintf(stderr, "%s:%d: expected 'control = value'\n", path, line_number);
+			++failed;
+			continue;
+		}
+		*value++ = '\0';
+		end = key + strlen(key);
+		while (end > key && (end[-1] == ' ' || end[-1] == '\t')) {
+			*--end = '\0';
+		}
+		while (*value == ' ' || *value == '\t') {
+			++value;
+		}
+
+		if (strcasecmp(key, "model") == 0) {
+			continue;
+		}
+
+		control = c200_find_control(key);
+		if (control == NULL) {
+			fprintf(stderr, "%s:%d: unknown control %s, skipped\n", path, line_number, key);
+			++failed;
+			continue;
+		}
+		if (check_control_supported(fd, control, device) < 0) {
+			++failed;
+			continue;
+		}
+		if (handle_set_control(fd, control, value) < 0) {
+			fprintf(stderr, "%s:%d: failed to set %s to '%s': %s\n", path, line_number, control->name, value, strerror(errno));
+			++failed;
+			continue;
+		}
+		++applied;
+	}
+
+	fclose(file);
+	printf("applied %d control%s from %s%s\n", applied, applied == 1 ? "" : "s", path, failed ? " (with failures)" : "");
+	return failed;
+}
+
 static void list_controls(void)
 {
 	size_t count = 0;
@@ -293,6 +374,24 @@ int main(int argc, char **argv)
 
 		list_controls();
 		return 0;
+	}
+
+	if (strcmp(command, "apply-profile") == 0) {
+		int failures = 0;
+
+		if (argi + 1 != argc) {
+			usage(stderr, argv[0]);
+			return 2;
+		}
+
+		fd = open_device(device, O_RDWR);
+		if (fd < 0) {
+			return 1;
+		}
+
+		failures = apply_profile(fd, device, argv[argi]);
+		close(fd);
+		return failures ? 1 : 0;
 	}
 
 	if (strcmp(command, "get-fov") == 0) {

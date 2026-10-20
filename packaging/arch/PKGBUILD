@@ -1,0 +1,56 @@
+# Maintainer: Michael Suiter <demonspork@gmail.com>
+# VCS package: builds the current main branch. For a tagged release, drop the
+# -git suffix, set pkgver to the tag and point source= at the release tarball.
+
+pkgname=anker-webcam-tools-git
+pkgver=0.2.0.r0.g0000000
+pkgrel=1
+pkgdesc="CLI and GUI for Anker PowerConf C200 / AnkerWork C310 webcam vendor controls (FOV, HDR, Face AE, exposure smoothing)"
+arch=('x86_64' 'aarch64')
+url="https://github.com/demonspork/anker-powerconf-c200-linux-tools"
+license=('MIT')
+# The GUI links only glibc; it dlopens the display stack at runtime.
+depends=('glibc' 'gcc-libs' 'libgl' 'libxkbcommon' 'wayland' 'libx11' 'libxcursor' 'libxi' 'libxrandr')
+makedepends=('git' 'cargo' 'make' 'gcc')
+checkdepends=('desktop-file-utils' 'appstream')
+provides=("${pkgname%-git}")
+conflicts=("${pkgname%-git}")
+source=("${pkgname%-git}::git+${url}.git")
+sha256sums=('SKIP')
+
+pkgver() {
+	cd "${pkgname%-git}"
+	git describe --long --tags 2>/dev/null | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g' ||
+		printf '0.2.0.r%s.g%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+prepare() {
+	cd "${pkgname%-git}/gui"
+	export RUSTUP_TOOLCHAIN=stable
+	cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+	cd "${pkgname%-git}"
+	export RUSTUP_TOOLCHAIN=stable
+	export CARGO_TARGET_DIR=target
+	make
+	make gui CARGO_FLAGS=--frozen
+}
+
+check() {
+	cd "${pkgname%-git}"
+	export RUSTUP_TOOLCHAIN=stable
+	make test
+	make test-gui CARGO_FLAGS=--frozen
+	desktop-file-validate gui/assets/io.github.demonspork.AnkerWebcamGui.desktop
+	appstreamcli validate --no-net gui/assets/io.github.demonspork.AnkerWebcamGui.metainfo.xml
+}
+
+package() {
+	cd "${pkgname%-git}"
+	make DESTDIR="$pkgdir" PREFIX=/usr install
+	make DESTDIR="$pkgdir" PREFIX=/usr install-gui CARGO_FLAGS=--frozen
+	install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+	install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}

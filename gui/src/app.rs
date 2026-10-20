@@ -10,6 +10,11 @@ use crate::profiles::{sanitize_name, ProfileStore};
 
 const FOV_PRESETS: [(u16, &str); 3] = [(65, "Narrow"), (78, "Medium"), (95, "Wide")];
 
+const PROFILE_TICK_HELP: &str =
+    "Include this control in the profile. Ticked controls are written by \
+    \"Save as\" and \"Overwrite\"; unticked ones are left out, so loading the profile later leaves \
+    them untouched. \"Load\" ticks exactly the controls the file contains.";
+
 pub struct App {
     ctx: egui::Context,
     devices: Vec<CameraDevice>,
@@ -28,6 +33,8 @@ pub struct App {
 
     /// Controls edited this frame; written once the pointer is released.
     dirty: Vec<usize>,
+    /// ANKER_GUI_SCREENSHOT=<file.png>: save the window after a few seconds and quit (dev aid).
+    screenshot: Option<(String, std::time::Instant, bool)>,
 
     profiles: ProfileStore,
     profile_names: Vec<String>,
@@ -54,6 +61,10 @@ impl App {
             show_all_cameras: std::env::var_os("ANKER_GUI_SHOW_ALL").is_some(),
             camera_busy: false,
             dirty: Vec::new(),
+            screenshot: std::env::var("ANKER_GUI_SCREENSHOT")
+                .ok()
+                .filter(|p| !p.is_empty())
+                .map(|p| (p, std::time::Instant::now(), false)),
             profiles: ProfileStore::new(),
             profile_names: Vec::new(),
             selected_profile: None,
@@ -213,7 +224,7 @@ impl App {
 
     fn profile_bar(&mut self, ui: &mut egui::Ui) {
         let mut action: Option<ProfileAction> = None;
-        ui.horizontal_wrapped(|ui| {
+        ui.horizontal(|ui| {
             let current = self
                 .selected_profile
                 .and_then(|i| self.profile_names.get(i).cloned())
@@ -300,7 +311,7 @@ impl App {
                 action = Some(ProfileAction::Refresh);
             }
         });
-        ui.horizontal_wrapped(|ui| {
+        ui.horizontal(|ui| {
             let (selected, selectable) = self
                 .camera
                 .as_ref()
@@ -385,7 +396,7 @@ impl App {
     }
 
     fn top_bar(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal_wrapped(|ui| {
+        ui.horizontal(|ui| {
             ui.label("Camera:");
             let current = self
                 .devices
@@ -423,16 +434,33 @@ impl App {
                 }
             }
 
-            ui.separator();
+        });
+        ui.horizontal(|ui| {
             ui.label("Preview:");
-            let mode_label = |m: &ffi::CapMode| format!("{} {}x{} @{}", ffi::fourcc_to_string(m.fourcc), m.width, m.height, m.max_fps);
-            let current_mode = self.modes.get(self.selected_mode).map(mode_label).unwrap_or_default();
+            let mode_label = |m: &ffi::CapMode| {
+                format!(
+                    "{} {}x{} @{}",
+                    ffi::fourcc_to_string(m.fourcc),
+                    m.width,
+                    m.height,
+                    m.max_fps
+                )
+            };
+            let current_mode = self
+                .modes
+                .get(self.selected_mode)
+                .map(mode_label)
+                .unwrap_or_default();
             let mut mode_changed = false;
             egui::ComboBox::from_id_salt("mode")
                 .selected_text(current_mode)
                 .show_ui(ui, |ui| {
                     for (i, mode) in self.modes.iter().enumerate() {
-                        if ui.selectable_label(i == self.selected_mode, mode_label(mode)).clicked() && i != self.selected_mode {
+                        if ui
+                            .selectable_label(i == self.selected_mode, mode_label(mode))
+                            .clicked()
+                            && i != self.selected_mode
+                        {
                             self.selected_mode = i;
                             mode_changed = true;
                         }
@@ -458,10 +486,13 @@ impl App {
                     self.start_preview();
                 }
             }
-            if self.camera_busy {
-                ui.colored_label(Color32::KHAKI, "camera in use by another application; preview hidden, controls still work");
-            }
         });
+        if self.camera_busy {
+            ui.colored_label(
+                Color32::KHAKI,
+                "Camera in use by another application: preview hidden, controls still work.",
+            );
+        }
     }
 
     fn control_panel(&mut self, ui: &mut egui::Ui) {
@@ -481,6 +512,16 @@ impl App {
         }
         ui.separator();
 
+        // Column header: control on the left, the profile tick on the right.
+        ui.horizontal(|ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.small("profile").on_hover_text(PROFILE_TICK_HELP);
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.small("control");
+                });
+            });
+        });
+
         let mut section = "";
         for index in 0..camera.controls.len() {
             let is_vendor = camera.controls[index].kind <= ffi::KIND_VENDOR_ENABLE_U8;
@@ -491,39 +532,44 @@ impl App {
             };
             if heading != section {
                 section = heading;
-                ui.add_space(6.0);
+                ui.add_space(8.0);
                 ui.heading(heading);
+                ui.add_space(2.0);
             }
+            ui.separator();
             let changed = {
                 let control = &mut camera.controls[index];
                 let title = control.name.replace('_', " ");
                 let enabled = !control.inactive && !control.read_only;
                 let mut changed = false;
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    ui.add_enabled(
-                        !control.read_only,
-                        egui::Checkbox::without_text(&mut control.include_in_profile),
-                    )
-                    .on_hover_text(
-                        "Include in profile. Ticked controls are written by \"Save as\" and \"Overwrite\"; \
-                         unticked ones are left out, so loading the profile later leaves them untouched. \
-                         \"Load\" ticks exactly the controls the file contains.",
-                    );
-                    ui.label(egui::RichText::new(title).strong())
-                        .on_hover_text(&control.description);
+                ui.horizontal_top(|ui| {
+                    // Pin the profile tick to the right edge, then lay the control out in what is left.
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
+                        ui.add_enabled(
+                            !control.read_only,
+                            egui::Checkbox::without_text(&mut control.include_in_profile),
+                        )
+                        .on_hover_text(PROFILE_TICK_HELP);
+                        ui.add_space(6.0);
+                        ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                            ui.label(egui::RichText::new(title).strong())
+                                .on_hover_text(&control.description);
+                            ui.add_enabled_ui(enabled, |ui| {
+                                if let Some(value) = control.value.as_mut() {
+                                    changed =
+                                        control_widget(ui, &control.name, control.max_value, value);
+                                }
+                            });
+                            if control.inactive {
+                                ui.small("inactive: another control overrides it");
+                            }
+                            if let Some(error) = &control.error {
+                                ui.colored_label(Color32::LIGHT_RED, error);
+                            }
+                        });
+                    });
                 });
-                ui.add_enabled_ui(enabled, |ui| {
-                    if let Some(value) = control.value.as_mut() {
-                        changed = control_widget(ui, &control.name, control.max_value, value);
-                    }
-                });
-                if control.inactive {
-                    ui.small("inactive (another control overrides it)");
-                }
-                if let Some(error) = &control.error {
-                    ui.colored_label(Color32::LIGHT_RED, error);
-                }
+                ui.add_space(2.0);
                 changed
             };
             if changed {
@@ -684,6 +730,34 @@ fn default_mode(modes: &[ffi::CapMode]) -> usize {
         .unwrap_or(0)
 }
 
+impl App {
+    fn handle_screenshot(&mut self, ctx: &egui::Context) {
+        let Some((path, started, requested)) = self.screenshot.as_mut() else {
+            return;
+        };
+        if !*requested && started.elapsed().as_secs_f32() > 3.0 {
+            *requested = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+        }
+        let shot = ctx.input(|i| {
+            i.events.iter().find_map(|e| match e {
+                egui::Event::Screenshot { image, .. } => Some(image.clone()),
+                _ => None,
+            })
+        });
+        if let Some(image) = shot {
+            let [w, h] = image.size;
+            let bytes = image.as_raw();
+            match image::save_buffer(&*path, bytes, w as u32, h as u32, image::ColorType::Rgba8) {
+                Ok(()) => eprintln!("screenshot: wrote {path}"),
+                Err(e) => eprintln!("screenshot: {e}"),
+            }
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+        ctx.request_repaint_after(std::time::Duration::from_millis(100));
+    }
+}
+
 enum ProfileAction {
     Load,
     Overwrite,
@@ -692,12 +766,44 @@ enum ProfileAction {
     Refresh,
 }
 
+/// A switch for feature on/off values, visually distinct from the square profile tick boxes.
+fn toggle(ui: &mut egui::Ui, on: &mut bool) -> bool {
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        let size = egui::vec2(36.0, 18.0);
+        let (rect, mut response) = ui.allocate_exact_size(size, Sense::click());
+        if response.clicked() {
+            *on = !*on;
+            response.mark_changed();
+            changed = true;
+        }
+        let how_on = ui.ctx().animate_bool_responsive(response.id, *on);
+        let visuals = ui.style().interact_selectable(&response, *on);
+        let rect = rect.expand(visuals.expansion);
+        let radius = 0.5 * rect.height();
+        ui.painter().rect(
+            rect,
+            radius,
+            visuals.bg_fill,
+            visuals.bg_stroke,
+            StrokeKind::Inside,
+        );
+        let x = egui::lerp((rect.left() + radius)..=(rect.right() - radius), how_on);
+        ui.painter().circle(
+            egui::pos2(x, rect.center().y),
+            0.75 * radius,
+            visuals.fg_stroke.color,
+            visuals.fg_stroke,
+        );
+        ui.label(if *on { "on" } else { "off" });
+    });
+    changed
+}
+
 /// Draw the widget for one control value. Returns true if the user changed it.
 fn control_widget(ui: &mut egui::Ui, name: &str, max_value: u8, value: &mut ControlValue) -> bool {
     match value {
-        ControlValue::VendorBool(v) | ControlValue::V4l2Bool(v) => {
-            ui.checkbox(v, "enabled").changed()
-        }
+        ControlValue::VendorBool(v) | ControlValue::V4l2Bool(v) => toggle(ui, v),
         ControlValue::VendorU8(v) => ui.add(egui::DragValue::new(v).range(0..=255)).changed(),
         ControlValue::Fov(v) => {
             let mut changed = false;
@@ -715,7 +821,7 @@ fn control_widget(ui: &mut egui::Ui, name: &str, max_value: u8, value: &mut Cont
             changed
         }
         ControlValue::AreaMetering(a) => {
-            let mut changed = ui.checkbox(&mut a.enable, "enabled").changed();
+            let mut changed = toggle(ui, &mut a.enable);
             if a.enable && (a.width == 0 || a.height == 0) {
                 *a = ffi::AreaMetering {
                     enable: true,
@@ -771,11 +877,11 @@ fn control_widget(ui: &mut egui::Ui, name: &str, max_value: u8, value: &mut Cont
             a.height = a.height.clamp(1, ffi::AREA_GRID_HEIGHT);
             a.x = a.x.min(ffi::AREA_GRID_WIDTH - a.width);
             a.y = a.y.min(ffi::AREA_GRID_HEIGHT - a.height);
-            ui.small("drag the box on the preview to move it; coordinates are on a 3840x2160 grid");
+            ui.small("3840x2160 grid; drag the box on the preview to move it");
             changed
         }
         ControlValue::EnableU8(e) => {
-            let mut changed = ui.checkbox(&mut e.enable, "enabled").changed();
+            let mut changed = toggle(ui, &mut e.enable);
             let label = if name == "exposure_compensation" {
                 "compensation (30 = neutral)"
             } else {
@@ -831,6 +937,7 @@ fn control_widget(ui: &mut egui::Ui, name: &str, max_value: u8, value: &mut Cont
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.handle_screenshot(ctx);
         if self.preview.as_ref().is_some_and(|p| p.is_busy()) {
             self.preview = None;
             self.texture = None;
@@ -863,8 +970,8 @@ impl eframe::App for App {
             });
         } else {
             egui::SidePanel::left("controls")
-                .default_width(380.0)
-                .min_width(300.0)
+                .default_width(430.0)
+                .min_width(340.0)
                 .show(ctx, |ui| {
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         self.control_panel(ui);

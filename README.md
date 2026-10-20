@@ -174,7 +174,7 @@ brightness = 0
 - `vendor only`: just the Anker controls (FOV, HDR, flip, anti-flicker, exposure smoothing, Face AE, exposure compensation).
 - `none`: untick everything and pick by hand.
 
-Read-only controls can never be ticked. Hovering the tick box, the buttons and the quick selections shows the same explanations as tooltips.
+The tick boxes form their own column at the right edge of the panel, under a "profile" header, so they are easy to tell apart from the on/off switches that belong to the controls themselves. Read-only controls can never be ticked. Hovering the tick box, the buttons and the quick selections shows the same explanations as tooltips.
 
 **What loading does.** "Load" applies only the controls listed in the file; every other control keeps its current value. Mode switches (menus and toggles) are applied before dependent values, controls the current camera does not have are skipped and reported in the status line, and the panel re-reads everything afterwards. Load also ticks exactly the controls the file contains, so "Overwrite" after a Load writes the same set back, and a profile you edited by hand stays in step with the GUI.
 
@@ -203,7 +203,7 @@ Packaging files are in `packaging/`:
 
 The preview holds the capture node open, so stop it (or close the app) before a video call needs the camera. If another application already holds the camera, the preview pane is hidden and the controls still work.
 
-The preview mode list is ordered largest first; on a C310 that puts `MJPG 3840x2160 @30` at the top. Three environment variables tweak startup: `ANKER_GUI_MODE="MJPG 3840x2160"` picks the initial preview mode, `ANKER_GUI_PROFILE=name` loads a profile, and `ANKER_GUI_SHOW_ALL=1` starts with "Show all cameras" ticked.
+The preview mode list is ordered largest first; on a C310 that puts `MJPG 3840x2160 @30` at the top. Three environment variables tweak startup: `ANKER_GUI_MODE="MJPG 3840x2160"` picks the initial preview mode, `ANKER_GUI_PROFILE=name` loads a profile, and `ANKER_GUI_SHOW_ALL=1` starts with "Show all cameras" ticked. For bug reports, `ANKER_GUI_SCREENSHOT=/path/shot.png` saves a picture of the window after three seconds and exits.
 
 ## Releases
 

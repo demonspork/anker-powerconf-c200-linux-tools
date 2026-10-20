@@ -27,7 +27,7 @@ Currently exposed controls:
 - `fov`
 - `hdr`
 - `horizontal_flip`
-- `vertical_screen`
+- `vertical_screen` (every write restarts the camera, see [below](#vertical_screen-restarts-the-camera))
 - `anti_flicker`
 - `exposure_smoothing` (alias `area_metering`) – C310 only
 - `exposure_compensation` – C310 only
@@ -308,6 +308,15 @@ Compatibility aliases are also available:
 ./build/anker-powerconf-c200-linux-tools get-fov
 ./build/anker-powerconf-c200-linux-tools set-fov narrow
 ```
+
+## `vertical_screen` restarts the camera
+
+On the C310 (firmware 2.18 and newer, per the AnkerWork app's own warning dialog) every write to `vertical_screen` makes the camera reboot itself, even a write of the value it already holds. The `SET_CUR` fails with `Protocol error`, the kernel logs `USB disconnect`, and about a second later the camera re-enumerates with the new value in place. The other vendor settings survived that soft restart in testing, unlike a physical replug. Both tools know about this:
+
+- The CLI reads the current value first and skips the write if nothing would change, prints that the camera is restarting, waits up to 8 s for the node to come back, and then reads the value back as usual. `apply-profile` applies such controls last, after everything else in the file, and skips them when unchanged, so a profile listing `vertical_screen` is safe in the udev rule: a replug does not turn into an endless restart loop.
+- The GUI stops the preview before the write, shows "reconnecting…" while the camera is away, then reopens it, keeps your profile ticks, and restarts the preview. The same reconnect kicks in when the camera is unplugged and plugged back in. The control's tooltip and a note under its switch say so.
+
+The AnkerWork app refuses to enter vertical mode unless the FOV is `wide` and HDR is off; the CLI prints a warning in that case but still sends the write. In our test on a USB 2.0 link the picture stayed landscape and the format list did not change, so on Linux the flag mostly matters for what the camera will accept afterwards; the vendor app uses it to pick resolutions. Setting it back to `off` restarts the camera once more.
 
 ## Notes
 

@@ -249,18 +249,113 @@ static int handle_set_control(int fd, const struct c200_control_info *control, c
 }
 
 /*
+ * Controls flagged C200_CONTROL_FLAG_RESTARTS_CAMERA reboot the camera on
+ * every write, even one that repeats the current value. Returns 1 if the
+ * value is already set (the write can be skipped), 0 if not, -1 on error.
+ */
+static int restart_control_unchanged(int fd, const struct c200_control_info *control, const char *value_text)
+{
+	bool wanted = false;
+	bool current = false;
+
+	if (control->kind != C200_CONTROL_KIND_VENDOR_BOOL) {
+		return 0;
+	}
+	if (!c200_parse_bool(value_text, &wanted)) {
+		errno = EINVAL;
+		return -1;
+	}
+	if (c200_vendor_get_bool(fd, (uint8_t)control->id, &current) < 0) {
+		return -1;
+	}
+	return current == wanted;
+}
+
+/* The AnkerWork app refuses vertical mode unless the FOV is wide and HDR is off; say so. */
+static void warn_vertical_screen_preconditions(int fd, const struct c200_control_info *control, const char *value_text)
+{
+	const struct c200_control_info *hdr = c200_find_control("hdr");
+	bool wanted = false;
+	bool hdr_on = false;
+	uint16_t fov = 0;
+
+	if (control->id != 0x0a || !c200_parse_bool(value_text, &wanted) || !wanted) {
+		return;
+	}
+	if (c200_fov_get(fd, &fov) < 0 || hdr == NULL || c200_vendor_get_bool(fd, (uint8_t)hdr->id, &hdr_on) < 0) {
+		return;
+	}
+	if (fov < 95 || hdr_on) {
+		fprintf(stderr, "warning: AnkerWork only switches to vertical mode with fov wide (95) and hdr off; current fov %u, hdr %s\n",
+			fov, c200_format_bool(hdr_on));
+	}
+}
+
+/*
+ * Write a control, absorbing the self-restart some controls trigger: the SET
+ * fails with EPROTO as the camera drops off the bus, so wait for it to
+ * re-enumerate and leave a fresh descriptor in *fd. Returns 0 on success,
+ * 1 if the write was skipped because the value was already set, -1 on
+ * failure (errno set; *fd may be -1 if the camera never came back).
+ */
+static int set_control_with_restart(int *fd, const char *device, const struct c200_control_info *control, const char *value_text)
+{
+	int unchanged = 0;
+	int new_fd = -1;
+
+	if (!(control->flags & C200_CONTROL_FLAG_RESTARTS_CAMERA)) {
+		return handle_set_control(*fd, control, value_text);
+	}
+
+	unchanged = restart_control_unchanged(*fd, control, value_text);
+	if (unchanged < 0) {
+		return -1;
+	}
+	if (unchanged) {
+		fprintf(stderr, "%s is already %s; not written because every write restarts the camera\n", control->name, value_text);
+		return 1;
+	}
+	warn_vertical_screen_preconditions(*fd, control, value_text);
+
+	if (handle_set_control(*fd, control, value_text) == 0) {
+		return 0;
+	}
+	if (!c200_device_errno_means_gone(errno)) {
+		return -1;
+	}
+
+	fprintf(stderr, "%s: the camera restarts itself to apply this; waiting for %s to come back...\n", control->name, device);
+	close(*fd);
+	*fd = -1;
+	new_fd = c200_device_reopen(device, 8000);
+	if (new_fd < 0) {
+		return -1;
+	}
+	*fd = new_fd;
+	return 0;
+}
+
+/*
  * Apply a settings profile: a text file of "control = value" lines as written by
  * the GUI (lines starting with '#' and the "model = ..." line are ignored).
  * Controls that are unknown, unsupported on this camera or rejected are reported
  * and skipped; the return value is the number of failures.
  */
-static int apply_profile(int fd, const char *device, const char *path)
+static int apply_profile(int *fd, const char *device, const char *path)
 {
 	FILE *file = fopen(path, "r");
 	char line[256];
 	int line_number = 0;
 	int applied = 0;
 	int failed = 0;
+	/* Controls that restart the camera go last, so the rest of the profile lands first. */
+	struct {
+		const struct c200_control_info *control;
+		char value[64];
+		int line_number;
+	} deferred[4];
+	int deferred_count = 0;
+	int i = 0;
 
 	if (file == NULL) {
 		fprintf(stderr, "failed to open %s: %s\n", path, strerror(errno));
@@ -310,11 +405,19 @@ static int apply_profile(int fd, const char *device, const char *path)
 			++failed;
 			continue;
 		}
-		if (check_control_supported(fd, control, device) < 0) {
+		if (check_control_supported(*fd, control, device) < 0) {
 			++failed;
 			continue;
 		}
-		if (handle_set_control(fd, control, value) < 0) {
+		if ((control->flags & C200_CONTROL_FLAG_RESTARTS_CAMERA) && deferred_count < (int)(sizeof(deferred) / sizeof(deferred[0])) &&
+		    strlen(value) < sizeof(deferred[0].value)) {
+			deferred[deferred_count].control = control;
+			strcpy(deferred[deferred_count].value, value);
+			deferred[deferred_count].line_number = line_number;
+			++deferred_count;
+			continue;
+		}
+		if (handle_set_control(*fd, control, value) < 0) {
 			fprintf(stderr, "%s:%d: failed to set %s to '%s': %s\n", path, line_number, control->name, value, strerror(errno));
 			++failed;
 			continue;
@@ -323,6 +426,21 @@ static int apply_profile(int fd, const char *device, const char *path)
 	}
 
 	fclose(file);
+
+	for (i = 0; i < deferred_count; ++i) {
+		int rc = set_control_with_restart(fd, device, deferred[i].control, deferred[i].value);
+
+		if (rc < 0) {
+			fprintf(stderr, "%s:%d: failed to set %s to '%s': %s\n", path, deferred[i].line_number, deferred[i].control->name,
+				deferred[i].value, strerror(errno));
+			++failed;
+			if (*fd < 0) {
+				break;
+			}
+		} else if (rc == 0) {
+			++applied;
+		}
+	}
 	printf("applied %d control%s from %s%s\n", applied, applied == 1 ? "" : "s", path, failed ? " (with failures)" : "");
 	return failed;
 }
@@ -389,8 +507,10 @@ int main(int argc, char **argv)
 			return 1;
 		}
 
-		failures = apply_profile(fd, device, argv[argi]);
-		close(fd);
+		failures = apply_profile(&fd, device, argv[argi]);
+		if (fd >= 0) {
+			close(fd);
+		}
 		return failures ? 1 : 0;
 	}
 
@@ -496,9 +616,11 @@ int main(int argc, char **argv)
 			return 1;
 		}
 
-		if (handle_set_control(fd, control, value_text) < 0) {
+		if (set_control_with_restart(&fd, device, control, value_text) < 0) {
 			fprintf(stderr, "failed to set %s on %s: %s\n", control->name, device, strerror(errno));
-			close(fd);
+			if (fd >= 0) {
+				close(fd);
+			}
 			return 1;
 		}
 

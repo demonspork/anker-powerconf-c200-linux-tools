@@ -18,6 +18,9 @@ enum c200_control_kind {
 	C200_CONTROL_KIND_V4L2_MENU,
 };
 
+/* Every write of the control makes the camera reboot itself (C310 firmware 2.18+, vertical_screen). */
+#define C200_CONTROL_FLAG_RESTARTS_CAMERA (1u << 0)
+
 struct c200_control_info {
 	const char *name;
 	enum c200_control_kind kind;
@@ -25,6 +28,7 @@ struct c200_control_info {
 	const char *description;
 	uint8_t max_value; /* Only used by C200_CONTROL_KIND_VENDOR_ENABLE_U8. */
 	unsigned int models; /* Bitmask of enum c200_model this control is known to work on. */
+	unsigned int flags; /* C200_CONTROL_FLAG_* */
 };
 
 const struct c200_control_info *c200_find_control(const char *name);

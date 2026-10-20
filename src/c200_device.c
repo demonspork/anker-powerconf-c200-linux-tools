@@ -1,11 +1,17 @@
+#define _DEFAULT_SOURCE
 #include "c200_device.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+#include <unistd.h>
+#include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <sys/sysmacros.h>
+#include <linux/videodev2.h>
 
 enum c200_model c200_model_from_usb_id(const struct c200_usb_id *id)
 {
@@ -139,4 +145,48 @@ int c200_device_get_usb_id(int fd, struct c200_usb_id *id)
 	 */
 	snprintf(dir, sizeof(dir), "/sys/dev/char/%u:%u/device/..", major(st.st_rdev), minor(st.st_rdev));
 	return c200_device_read_usb_id_from_dir(dir, id);
+}
+
+bool c200_device_errno_means_gone(int err)
+{
+	return err == ENODEV || err == EPROTO || err == EIO || err == ESHUTDOWN || err == EPIPE || err == ENXIO;
+}
+
+static void sleep_ms(unsigned int ms)
+{
+	struct timespec ts;
+
+	ts.tv_sec = ms / 1000;
+	ts.tv_nsec = (long)(ms % 1000) * 1000000L;
+	nanosleep(&ts, NULL);
+}
+
+int c200_device_reopen(const char *path, unsigned int timeout_ms)
+{
+	const unsigned int step_ms = 100;
+	unsigned int waited_ms = 0;
+
+	/* The old node lingers for a moment after the SET fails; do not grab the dying device. */
+	sleep_ms(3 * step_ms);
+	waited_ms += 3 * step_ms;
+
+	for (;;) {
+		int fd = open(path, O_RDWR);
+
+		if (fd >= 0) {
+			struct v4l2_capability cap;
+
+			memset(&cap, 0, sizeof(cap));
+			if (ioctl(fd, VIDIOC_QUERYCAP, &cap) == 0) {
+				return fd;
+			}
+			close(fd);
+		}
+		if (waited_ms >= timeout_ms) {
+			errno = ETIMEDOUT;
+			return -1;
+		}
+		sleep_ms(step_ms);
+		waited_ms += step_ms;
+	}
 }

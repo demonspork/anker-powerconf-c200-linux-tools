@@ -38,6 +38,9 @@ pub struct App {
     /// Draw our own title row with close/maximize buttons (bare compositors such as Hyprland).
     window_controls: bool,
     maximized: bool,
+    /// The camera dropped off the bus (self-restart after a vertical_screen write, or an unplug)
+    /// and we are polling for it to come back.
+    reconnect: Option<Reconnect>,
 
     profiles: ProfileStore,
     profile_names: Vec<String>,
@@ -70,6 +73,7 @@ impl App {
                 .map(|p| (p, std::time::Instant::now(), false)),
             window_controls: wants_window_controls(),
             maximized: false,
+            reconnect: None,
             profiles: ProfileStore::new(),
             profile_names: Vec::new(),
             selected_profile: None,
@@ -98,6 +102,7 @@ impl App {
         self.preview = None;
         self.texture = None;
         self.camera = None;
+        self.reconnect = None;
         self.open_error = None;
         self.camera_busy = false;
         self.modes.clear();
@@ -151,7 +156,128 @@ impl App {
         self.dirty.dedup();
         for index in std::mem::take(&mut self.dirty) {
             if let Some(value) = camera.controls.get(index).and_then(|c| c.value.clone()) {
+                if camera.controls[index].restarts_camera {
+                    // The streaming fd dies with the camera anyway; stop cleanly first,
+                    // as the vendor app does.
+                    self.preview = None;
+                    self.texture = None;
+                }
                 camera.write(index, &value);
+            }
+        }
+    }
+
+    /// Notice a dead camera handle and start waiting for the device to come back.
+    fn detect_lost_camera(&mut self) {
+        if !self.camera.as_ref().is_some_and(|c| c.lost) {
+            return;
+        }
+        let camera = self.camera.take().expect("checked above");
+        let Some(device) = self.devices.get(self.selected_device).cloned() else {
+            return;
+        };
+        let reason = match &camera.restart_cause {
+            Some(name) => format!(
+                "the camera restarts itself to apply {}",
+                name.replace('_', " ")
+            ),
+            None => "the camera disconnected".to_string(),
+        };
+        eprintln!("camera: {reason}; waiting for {} to come back", device.path);
+        self.preview = None;
+        self.texture = None;
+        self.reconnect = Some(Reconnect {
+            path: device.path,
+            model: device.model,
+            usb_id: device.usb_id,
+            started: std::time::Instant::now(),
+            reason,
+            ticks: camera
+                .controls
+                .iter()
+                .map(|c| (c.name.clone(), c.include_in_profile))
+                .collect(),
+        });
+    }
+
+    /// Poll for a camera that went away. A C310 re-enumerates about a second after a
+    /// vertical_screen write; give it ten before asking the user to replug. The node usually
+    /// keeps its number, but if something still held the old one the camera comes back under
+    /// a new path, so after the first second we also rescan for the same USB id.
+    fn poll_reconnect(&mut self, ctx: &egui::Context) {
+        let Some(pending) = self.reconnect.as_ref() else {
+            return;
+        };
+        ctx.request_repaint_after(std::time::Duration::from_millis(250));
+        let elapsed = pending.started.elapsed();
+        if elapsed < std::time::Duration::from_millis(300) {
+            return;
+        }
+        let mut path = pending.path.clone();
+        let mut reopened = Camera::open(&path, pending.model)
+            .ok()
+            .filter(Camera::responsive);
+        if reopened.is_none() && elapsed > std::time::Duration::from_secs(1) {
+            let usb_id = pending.usb_id;
+            let found = find_cameras(self.show_all_cameras)
+                .into_iter()
+                .find(|d| d.usb_id == usb_id && d.path != pending.path);
+            if let Some(device) = found {
+                reopened = Camera::open(&device.path, device.model)
+                    .ok()
+                    .filter(Camera::responsive);
+                if reopened.is_some() {
+                    path = device.path.clone();
+                    eprintln!("camera: came back as {path} instead of {}", pending.path);
+                    self.devices = find_cameras(self.show_all_cameras);
+                    self.selected_device = self
+                        .devices
+                        .iter()
+                        .position(|d| d.path == path)
+                        .unwrap_or(0);
+                }
+            }
+        }
+        match reopened {
+            Some(mut camera) => {
+                let pending = self.reconnect.take().expect("checked above");
+                for control in &mut camera.controls {
+                    if let Some((_, ticked)) =
+                        pending.ticks.iter().find(|(name, _)| *name == control.name)
+                    {
+                        control.include_in_profile = *ticked;
+                    }
+                }
+                self.camera = Some(camera);
+                self.open_error = None;
+                self.modes = list_modes(&path);
+                if self.selected_mode >= self.modes.len() {
+                    self.selected_mode = default_mode(&self.modes);
+                }
+                if self.preview_wanted {
+                    self.start_preview();
+                }
+                eprintln!(
+                    "camera: {path} is back after {:.1} s",
+                    elapsed.as_secs_f32()
+                );
+                self.set_profile_status(
+                    format!(
+                        "Reconnected after {:.1} s: {}.",
+                        elapsed.as_secs_f32(),
+                        pending.reason
+                    ),
+                    true,
+                );
+            }
+            None => {
+                if elapsed > std::time::Duration::from_secs(10) {
+                    let pending = self.reconnect.take().expect("checked above");
+                    self.open_error = Some(format!(
+                        "{}: {} but it did not come back within 10 s. Replug it and press Rescan.",
+                        pending.path, pending.reason
+                    ));
+                }
             }
         }
     }
@@ -582,6 +708,20 @@ impl App {
             ui.colored_label(Color32::LIGHT_RED, error);
             return;
         }
+        if let Some(pending) = &self.reconnect {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                let mut reason = pending.reason.clone();
+                if let Some(first) = reason.get_mut(0..1) {
+                    first.make_ascii_uppercase();
+                }
+                ui.label(format!(
+                    "{reason}; reconnecting… ({:.0} s)",
+                    pending.started.elapsed().as_secs_f32()
+                ));
+            });
+            return;
+        }
         let Some(camera) = self.camera.as_mut() else {
             ui.label("No compatible camera found. Plug in a PowerConf C200 or AnkerWork C310 and press Rescan, or tick \"Show all cameras\".");
             return;
@@ -634,14 +774,23 @@ impl App {
                         .on_hover_text(PROFILE_TICK_HELP);
                         ui.add_space(6.0);
                         ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                            let help = if control.restarts_camera {
+                                format!("{}\n\n{RESTART_HELP}", control.description)
+                            } else {
+                                control.description.clone()
+                            };
                             ui.label(egui::RichText::new(title).strong())
-                                .on_hover_text(&control.description);
+                                .on_hover_text(&help);
                             ui.add_enabled_ui(enabled, |ui| {
                                 if let Some(value) = control.value.as_mut() {
                                     changed =
                                         control_widget(ui, &control.name, control.max_value, value);
                                 }
                             });
+                            if control.restarts_camera {
+                                ui.small("switching restarts the camera (about 2 s); the app reconnects by itself")
+                                    .on_hover_text(RESTART_HELP);
+                            }
                             if control.inactive {
                                 ui.small("inactive: another control overrides it");
                             }
@@ -781,6 +930,24 @@ impl App {
         }
     }
 }
+
+/// A camera we are waiting for after it dropped off the bus.
+struct Reconnect {
+    path: String,
+    model: i32,
+    usb_id: ffi::UsbId,
+    started: std::time::Instant,
+    /// Lower-case clause, e.g. "the camera restarts itself to apply vertical screen".
+    reason: String,
+    /// Profile ticks to restore on the reopened camera.
+    ticks: Vec<(String, bool)>,
+}
+
+const RESTART_HELP: &str =
+    "Every write of this control makes the camera reboot itself (about 2 seconds), \
+even a write of the value it already has, so it is only sent when the value changes. \
+The app stops the preview, waits for the camera to come back and reconnects on its own. \
+The AnkerWork app only switches to vertical mode with FOV at wide and HDR off.";
 
 /// Whether to draw our own title row with window buttons.
 ///
@@ -1054,6 +1221,8 @@ fn control_widget(ui: &mut egui::Ui, name: &str, max_value: u8, value: &mut Cont
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.handle_screenshot(ctx);
+        self.detect_lost_camera();
+        self.poll_reconnect(ctx);
         if self.preview.as_ref().is_some_and(|p| p.is_busy()) {
             self.preview = None;
             self.texture = None;

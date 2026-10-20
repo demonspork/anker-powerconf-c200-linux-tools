@@ -4,10 +4,11 @@ use std::ffi::CString;
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::os::fd::AsRawFd;
+use std::sync::atomic::{AtomicI32, Ordering};
 
 use crate::ffi;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ControlValue {
     VendorBool(bool),
     VendorU8(u8),
@@ -43,16 +44,37 @@ pub struct Control {
     /// Ticked in the panel: written by "Save as" / "Overwrite". Load sets it to
     /// match the file, so a profile round-trips the same set of controls.
     pub include_in_profile: bool,
+    /// Every write reboots the camera (vertical_screen on the C310): the caller must expect
+    /// the device to vanish for a couple of seconds and reconnect.
+    pub restarts_camera: bool,
 }
 
 /// An open camera: a control fd plus the controls the model supports.
 pub struct Camera {
     file: File,
     pub controls: Vec<Control>,
+    /// The device dropped off the bus (self-restart or unplug); this handle is dead.
+    pub lost: bool,
+    /// Set with `lost` when a control write caused the restart, naming that control.
+    pub restart_cause: Option<String>,
 }
 
+/// errno of the most recent failed C call, captured by `last_error`.
+static LAST_ERRNO: AtomicI32 = AtomicI32::new(0);
+
 fn last_error() -> String {
-    io::Error::last_os_error().to_string()
+    let error = io::Error::last_os_error();
+    LAST_ERRNO.store(error.raw_os_error().unwrap_or(0), Ordering::Relaxed);
+    error.to_string()
+}
+
+fn take_last_errno() -> i32 {
+    LAST_ERRNO.swap(0, Ordering::Relaxed)
+}
+
+/// ENODEV, EPROTO, EIO, ESHUTDOWN, EPIPE, ENXIO: the camera is gone, not merely unhappy.
+pub fn errno_means_gone(errno: i32) -> bool {
+    matches!(errno, 19 | 71 | 5 | 108 | 32 | 6)
 }
 
 impl Camera {
@@ -61,6 +83,8 @@ impl Camera {
         let mut camera = Camera {
             file,
             controls: Vec::new(),
+            lost: false,
+            restart_cause: None,
         };
         camera.controls = table_for_model(model);
         camera.refresh_all();
@@ -70,6 +94,12 @@ impl Camera {
 
     fn fd(&self) -> i32 {
         self.file.as_raw_fd()
+    }
+
+    /// True once at least one control answered: a freshly re-enumerated camera is usable,
+    /// a dying node (open succeeded, every read failed) is not.
+    pub fn responsive(&self) -> bool {
+        !self.lost && self.controls.iter().any(|c| c.value.is_some())
     }
 
     pub fn refresh_all(&mut self) {
@@ -83,7 +113,11 @@ impl Camera {
     }
 
     pub fn refresh(&mut self, index: usize) {
+        if self.lost {
+            return;
+        }
         let fd = self.fd();
+        take_last_errno();
         let control = &mut self.controls[index];
         control.error = None;
         let result = unsafe { read_value(fd, control) };
@@ -92,17 +126,44 @@ impl Camera {
             Err(message) => {
                 control.value = None;
                 control.error = Some(message);
+                if errno_means_gone(take_last_errno()) {
+                    self.lost = true;
+                }
             }
         }
     }
 
     /// Write a new value, then re-read so the panel shows what the camera accepted.
+    ///
+    /// A control flagged `restarts_camera` is not written when it already holds the value
+    /// (the reboot would be for nothing), and when its write makes the camera drop off the
+    /// bus the handle is marked `lost` with the control named in `restart_cause`.
     pub fn write(&mut self, index: usize, value: &ControlValue) {
+        if self.lost {
+            return;
+        }
         let fd = self.fd();
+        take_last_errno();
         let control = &mut self.controls[index];
+        if control.restarts_camera && control.value.as_ref() == Some(value) {
+            return;
+        }
         let result = unsafe { write_value(fd, control, value) };
         if let Err(message) = result {
+            let gone = errno_means_gone(take_last_errno());
+            if gone && control.restarts_camera {
+                // Expected: the camera reboots to apply it and comes back with the new value.
+                control.value = Some(value.clone());
+                control.error = None;
+                self.restart_cause = Some(control.name.clone());
+                self.lost = true;
+                return;
+            }
             control.error = Some(message);
+            if gone {
+                self.lost = true;
+                return;
+            }
         }
         self.refresh(index);
         // Standard controls can flip others between active and inactive (auto exposure).
@@ -210,8 +271,19 @@ impl Camera {
                 None => report.skipped.push(format!("{name} (bad value '{text}')")),
             }
         }
-        planned.sort_by_key(|(index, _)| apply_rank(self.controls[*index].kind));
+        // Controls that reboot the camera go last so the rest of the profile lands first.
+        planned.sort_by_key(|(index, _)| {
+            let control = &self.controls[*index];
+            (u8::from(control.restarts_camera), apply_rank(control.kind))
+        });
         for (index, value) in planned {
+            if self.lost {
+                report.skipped.push(format!(
+                    "{} (camera restarting; load the profile again once it is back)",
+                    self.controls[index].name
+                ));
+                continue;
+            }
             self.write(index, &value);
             match &self.controls[index].error {
                 Some(error) => report
@@ -259,6 +331,7 @@ fn table_for_model(model: i32) -> Vec<Control> {
                 read_only: false,
                 error: None,
                 include_in_profile: false,
+                restarts_camera: info.flags & ffi::FLAG_RESTARTS_CAMERA != 0,
             });
         }
     }
@@ -436,6 +509,7 @@ mod tests {
             read_only,
             error: None,
             include_in_profile: false,
+            restarts_camera: false,
         }
     }
 

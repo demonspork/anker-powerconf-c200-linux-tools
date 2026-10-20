@@ -141,6 +141,24 @@ static void test_get_usb_id_rejects_non_device(void)
 	assert(c200_device_get_usb_id(0, NULL) < 0);
 }
 
+static void test_restart_helpers(void)
+{
+	const struct c200_control_info *vertical = c200_find_control("vertical_screen");
+	const struct c200_control_info *hdr = c200_find_control("hdr");
+
+	assert(vertical != NULL && (vertical->flags & C200_CONTROL_FLAG_RESTARTS_CAMERA));
+	assert(hdr != NULL && hdr->flags == 0);
+
+	assert(c200_device_errno_means_gone(ENODEV));
+	assert(c200_device_errno_means_gone(EPROTO));
+	assert(!c200_device_errno_means_gone(EINVAL));
+	assert(!c200_device_errno_means_gone(0));
+
+	errno = 0;
+	assert(c200_device_reopen("/nonexistent/anker-webcam-video", 200) == -1);
+	assert(errno == ETIMEDOUT);
+}
+
 int main(void)
 {
 	test_model_from_usb_id();
@@ -148,5 +166,6 @@ int main(void)
 	test_control_gating();
 	test_read_usb_id_from_dir();
 	test_get_usb_id_rejects_non_device();
+	test_restart_helpers();
 	return 0;
 }

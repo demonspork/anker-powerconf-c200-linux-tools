@@ -20,7 +20,7 @@ pub const AREA_GRID_WIDTH: u16 = 3840;
 pub const AREA_GRID_HEIGHT: u16 = 2160;
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct UsbId {
     pub vendor_id: u16,
     pub product_id: u16,
@@ -34,7 +34,11 @@ pub struct ControlInfo {
     pub description: *const c_char,
     pub max_value: u8,
     pub models: c_uint,
+    pub flags: c_uint,
 }
+
+/// `C200_CONTROL_FLAG_RESTARTS_CAMERA`: every write makes the camera reboot itself.
+pub const FLAG_RESTARTS_CAMERA: c_uint = 1;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]

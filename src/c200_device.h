@@ -40,4 +40,14 @@ int c200_device_get_usb_id(int fd, struct c200_usb_id *id);
 /* Same lookup against an arbitrary sysfs USB device directory (for tests). */
 int c200_device_read_usb_id_from_dir(const char *usb_device_dir, struct c200_usb_id *id);
 
+/* True if the errno of a failed query means the camera dropped off the bus (self-restart or unplug). */
+bool c200_device_errno_means_gone(int err);
+
+/*
+ * Wait for a camera that restarted itself to re-enumerate and return a fresh
+ * descriptor for the same node. Polls until the node opens and answers
+ * VIDIOC_QUERYCAP, or timeout_ms elapses (-1, errno ETIMEDOUT).
+ */
+int c200_device_reopen(const char *path, unsigned int timeout_ms);
+
 #endif

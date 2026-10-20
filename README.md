@@ -150,7 +150,9 @@ Features:
 - Standard UVC controls show the driver's range and default, and grey out when another control overrides them (manual exposure under auto exposure, for example).
 - Values are written when you release the slider or box, then read back so the panel shows what the camera accepted.
 
-The preview holds the capture node open, so stop it (or close the app) before a video call needs the camera.
+The preview holds the capture node open, so stop it (or close the app) before a video call needs the camera. If another application already holds the camera, the preview pane is hidden and the controls still work.
+
+The preview mode list is ordered largest first; on a C310 that puts `MJPG 3840x2160 @30` at the top. Two environment variables tweak startup: `ANKER_GUI_MODE="MJPG 3840x2160"` picks the initial preview mode, and `ANKER_GUI_SHOW_ALL=1` starts with "Show all cameras" ticked.
 
 ## Releases
 

@@ -277,8 +277,9 @@ pub fn list_modes(path: &str) -> Vec<ffi::CapMode> {
     }
     modes.truncate(count as usize);
     modes.retain(|m| m.fourcc == ffi::FOURCC_YUYV || m.fourcc == ffi::FOURCC_MJPG);
+    // Largest first, then faster, then raw YUYV ahead of MJPEG at the same size.
     modes.sort_by_key(|m| {
-        std::cmp::Reverse((m.fourcc == ffi::FOURCC_YUYV, m.width * m.height, m.max_fps))
+        std::cmp::Reverse((m.width * m.height, m.max_fps, m.fourcc == ffi::FOURCC_YUYV))
     });
     modes
 }

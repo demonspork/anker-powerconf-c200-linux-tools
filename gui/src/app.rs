@@ -81,7 +81,8 @@ impl App {
             }
         }
         self.modes = list_modes(&device.path);
-        self.selected_mode = default_mode(&self.modes);
+        self.selected_mode =
+            requested_mode(&self.modes).unwrap_or_else(|| default_mode(&self.modes));
         if self.preview_wanted {
             self.start_preview();
         }
@@ -374,6 +375,18 @@ impl App {
             self.dirty.push(index);
         }
     }
+}
+
+/// Honour ANKER_GUI_MODE, e.g. "MJPG 3840x2160", for the initial preview mode.
+fn requested_mode(modes: &[ffi::CapMode]) -> Option<usize> {
+    let wanted = std::env::var("ANKER_GUI_MODE").ok()?;
+    let mut parts = wanted.split_whitespace();
+    let fourcc = parts.next()?.to_ascii_uppercase();
+    let (w, h) = parts.next()?.split_once('x')?;
+    let (w, h) = (w.parse::<u32>().ok()?, h.parse::<u32>().ok()?);
+    modes
+        .iter()
+        .position(|m| ffi::fourcc_to_string(m.fourcc) == fourcc && m.width == w && m.height == h)
 }
 
 /// Pick a preview mode: smooth (>= 24 fps) first, then closest to 720p, then raw YUYV over MJPEG.

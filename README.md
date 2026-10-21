@@ -209,11 +209,21 @@ On compositors that draw no title bars (Hyprland, niri, river, dwl) the window g
 
 ## Releases
 
-Prebuilt binaries are published on the GitHub Releases page:
+Prebuilt x86_64 Linux binaries (CLI and GUI, plus the desktop file and icons) are published on this fork's releases page:
 
-- [GitHub Releases](https://github.com/erans/anker-powerconf-c200-linux-tools/releases)
+- [GitHub Releases](https://github.com/demonspork/anker-powerconf-c200-linux-tools/releases)
 
-Download the release tarball for your architecture if you do not want to build from source.
+They need only glibc 2.39 or newer (Fedora 40+, Ubuntu 24.04+, Arch) and no other shared libraries; the GUI loads the Wayland or X11 stack at runtime. To install:
+
+```bash
+tar -xzf anker-webcam-tools-<version>-linux-x86_64.tar.gz
+cd anker-webcam-tools-<version>-linux-x86_64
+./install.sh            # as a user: ~/.local; as root: /usr/local
+PREFIX=/opt/anker ./install.sh   # or anywhere else
+./install.sh --uninstall
+```
+
+The tarball is produced by `make dist`, which refuses to package a binary that needs a newer glibc than that. Fedora users who prefer an RPM can build one from `packaging/fedora/anker-webcam-tools.spec` with `packaging/fedora/make-sources.sh` and `rpmbuild -ba`.
 
 ## Build
 

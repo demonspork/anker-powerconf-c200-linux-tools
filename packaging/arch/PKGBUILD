@@ -3,7 +3,7 @@
 # -git suffix, set pkgver to the tag and point source= at the release tarball.
 
 pkgname=anker-webcam-tools-git
-pkgver=0.2.0.r0.g0000000
+pkgver=0.3.0.r0.g0000000
 pkgrel=1
 pkgdesc="CLI and GUI for Anker PowerConf C200 / AnkerWork C310 webcam vendor controls (FOV, HDR, Face AE, exposure smoothing)"
 arch=('x86_64' 'aarch64')
@@ -21,7 +21,7 @@ sha256sums=('SKIP')
 pkgver() {
 	cd "${pkgname%-git}"
 	git describe --long --tags 2>/dev/null | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g' ||
-		printf '0.2.0.r%s.g%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+		printf '0.3.0.r%s.g%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
 }
 
 prepare() {

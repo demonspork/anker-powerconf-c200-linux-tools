@@ -1,6 +1,6 @@
 [package]
 name = "anker-webcam-gui"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "Settings panel and live preview for Anker PowerConf C200 / AnkerWork C310 webcams"
 license = "MIT"

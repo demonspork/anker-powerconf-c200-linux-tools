@@ -20,7 +20,7 @@ AREA_TEST_SRCS := $(COMMON_SRCS) $(TEST_DIR)/test_c200_area_metering.c
 ENABLE_U8_TEST_SRCS := $(COMMON_SRCS) $(TEST_DIR)/test_c200_enable_u8.c
 DEVICE_TEST_SRCS := $(COMMON_SRCS) $(TEST_DIR)/test_c200_device.c
 
-.PHONY: all test clean install gui test-gui install-gui
+.PHONY: all test clean install gui test-gui install-gui dist
 
 all: $(BUILD_DIR)/anker-powerconf-c200-linux-tools
 
@@ -64,3 +64,22 @@ install-gui:
 clean:
 	rm -rf $(BUILD_DIR)
 	$(MAKE) -C gui clean
+
+# Prebuilt release tarball: bin/ and share/ laid out as `make install` would,
+# plus install.sh, README and LICENSE. Fails if a binary needs a glibc newer
+# than our target distributions (see packaging/check-portability.sh).
+VERSION := $(shell sed -n 's/^version = "\(.*\)"/\1/p' gui/Cargo.toml)
+DIST_NAME := anker-webcam-tools-$(VERSION)-linux-$(shell uname -m)
+DIST_DIR := dist/$(DIST_NAME)
+
+dist: all gui
+	rm -rf $(DIST_DIR)
+	$(MAKE) install DESTDIR=$(CURDIR)/$(DIST_DIR) PREFIX=
+	$(MAKE) -C gui install DESTDIR=$(CURDIR)/$(DIST_DIR) PREFIX=
+	$(INSTALL) -Dm755 packaging/install.sh $(DIST_DIR)/install.sh
+	$(INSTALL) -Dm644 README.md $(DIST_DIR)/README.md
+	$(INSTALL) -Dm644 LICENSE $(DIST_DIR)/LICENSE
+	sh packaging/check-portability.sh $(DIST_DIR)/bin/*
+	tar -C dist -czf dist/$(DIST_NAME).tar.gz $(DIST_NAME)
+	cd dist && sha256sum $(DIST_NAME).tar.gz > $(DIST_NAME).tar.gz.sha256
+	@echo "wrote dist/$(DIST_NAME).tar.gz"

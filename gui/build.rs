@@ -28,8 +28,10 @@ fn main() {
         build.file(path);
     }
     println!("cargo:rerun-if-changed=csrc/awcap.c");
+    println!("cargo:rerun-if-changed=csrc/compat.c");
     println!("cargo:rerun-if-changed=csrc/awcap.h");
     build.file("csrc/awcap.c");
+    build.file("csrc/compat.c");
     build.compile("c200");
 }
 

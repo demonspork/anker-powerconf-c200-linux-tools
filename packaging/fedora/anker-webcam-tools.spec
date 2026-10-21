@@ -7,7 +7,7 @@
 %global srcname anker-powerconf-c200-linux-tools
 
 Name:           anker-webcam-tools
-Version:        0.2.0
+Version:        0.3.0
 Release:        1%{?dist}
 Summary:        CLI and GUI for Anker PowerConf C200 / AnkerWork C310 webcam vendor controls
 License:        MIT
@@ -73,5 +73,10 @@ appstream-util validate-relax --nonet %{buildroot}%{_metainfodir}/%{appid}.metai
 %{_datadir}/icons/hicolor/*/apps/%{appid}.*
 
 %changelog
+* Tue Oct 20 2026 Michael Suiter <demonspork@gmail.com> - 0.3.0-1
+- Handle the C310's self-restart on vertical_screen writes; GUI reconnects
+- Profile tick column, pill switches, own title row on bare compositors
+- Portable release tarball (make dist) with a glibc 2.39 ceiling
+
 * Sun Oct 19 2026 Michael Suiter <demonspork@gmail.com> - 0.2.0-1
 - CLI with C310 controls and apply-profile, egui GUI with live preview and profiles
